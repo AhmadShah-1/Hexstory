@@ -9,3 +9,5 @@ uploads/
 dist-static/
 uploads-staging/
 .vercel/
+.vercel
+.env*

@@ -172,6 +172,9 @@ Full, click-by-click setup is in **[docs/DEPLOYMENT.md](DEPLOYMENT.md)**. The sh
   Static files (`/assets/*`, `favicon.svg`) are served by the CDN first; a missing asset is a plain 404.
 - `index.html` is deliberately **not** a static file: Fastify serves it so every page gets the same Helmet
   headers, including a CSP whose image/upload origins come from the R2 settings at runtime.
+  On Vercel it reads the HTML once per instance and sends it directly. `@fastify/static` is loaded only
+  for local/self-hosted file serving: its CommonJS dependency chain requires an ESM-only package and
+  fails with `ERR_REQUIRE_ESM` in runtimes that disable synchronous `require(ESM)`.
 - Module scope in `serverless.ts` runs once per Function instance: one database pool, one pair of Redis
   connections and one presence timer per instance, never per request.
 - Functions run up to `maxDuration` (300 s in `vercel.json`, the Hobby maximum; Pro allows 800 s), and a

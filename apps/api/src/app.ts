@@ -1,9 +1,10 @@
 import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
-import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyError } from 'fastify';
 import { googleAuthRoutes } from './auth/google.js';
 import { SESSION_COOKIE, getSessionUser } from './auth/sessions.js';
@@ -39,6 +40,7 @@ export async function buildApp({
   storage,
   coordinator,
   heartbeatMs,
+  webRoot = WEB_DIST,
 }: {
   config: Config;
   sql: Sql;
@@ -46,6 +48,8 @@ export async function buildApp({
   coordinator: Coordinator;
   /** Presence refresh interval; only tests change it. */
   heartbeatMs?: number;
+  /** Built frontend directory; tests can supply an isolated HTML fixture. */
+  webRoot?: string;
 }) {
   const imageOrigins = storage.imageOrigin ? [storage.imageOrigin] : [];
   const uploadOrigins = storage.uploadOrigin ? [storage.uploadOrigin] : [];
@@ -123,23 +127,38 @@ export async function buildApp({
   await app.register(uploadRoutes(deps));
   await app.register(moderationRoutes(deps));
 
-  if (storage.localDir) {
-    await app.register(fastifyStatic, {
-      root: storage.localDir,
-      prefix: '/media/',
-      decorateReply: false,
-      immutable: true,
-      maxAge: '365d',
-    });
-  }
-
   // In production the API also serves the built web app; in development Vite does.
-  const serveWeb = config.NODE_ENV === 'production' && existsSync(WEB_DIST);
-  if (serveWeb) {
-    await app.register(fastifyStatic, { root: WEB_DIST, prefix: '/', wildcard: false });
+  const serveWeb = config.NODE_ENV === 'production' && existsSync(webRoot);
+  let indexHtml: string | undefined;
+  if (config.VERCEL === '1') {
+    // Vercel's CDN owns /assets/*; only page HTML is needed in the Function. Keep it behind
+    // Fastify so Helmet's environment-specific CSP still applies. Avoid loading @fastify/static
+    // here: its CommonJS entry requires ESM-only content-disposition, which Vercel rejects.
+    indexHtml = await readFile(join(webRoot, 'index.html'), 'utf8');
+  } else if (storage.localDir || serveWeb) {
+    const { default: fastifyStatic } = await import('@fastify/static');
+    if (storage.localDir) {
+      await app.register(fastifyStatic, {
+        root: storage.localDir,
+        prefix: '/media/',
+        decorateReply: false,
+        immutable: true,
+        maxAge: '365d',
+      });
+    }
+    if (serveWeb) {
+      await app.register(fastifyStatic, { root: webRoot, prefix: '/', wildcard: false });
+    }
   }
   app.setNotFoundHandler((req, reply) => {
-    if (serveWeb && isPageRequest(req.method, req.url)) return reply.sendFile('index.html', WEB_DIST);
+    if (serveWeb && isPageRequest(req.method, req.url)) {
+      if (indexHtml !== undefined) {
+        reply.type('text/html; charset=utf-8');
+        if (req.method === 'HEAD') return reply.header('content-length', Buffer.byteLength(indexHtml)).send();
+        return reply.send(indexHtml);
+      }
+      return reply.sendFile('index.html', webRoot);
+    }
     return reply.code(404).send({ error: 'not-found', message: 'Not found.' });
   });
 
