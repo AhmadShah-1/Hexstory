@@ -1,0 +1,35 @@
+{
+  "name": "@hexstory/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/index.ts",
+    "start": "NODE_ENV=production tsx src/index.ts",
+    "build": "tsc -p .",
+    "migrate": "tsx src/migrate.ts",
+    "typecheck": "tsc -p .",
+    "test": "vitest run",
+    "seed": "tsx src/seed.ts"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.1.5",
+    "@fastify/helmet": "^13.2.0",
+    "@fastify/multipart": "^10.1.6",
+    "@fastify/rate-limit": "^11.2.1",
+    "@fastify/static": "^10.1.8",
+    "@hexstory/shared": "*",
+    "arctic": "^3.7.0",
+    "fastify": "^5.12.7",
+    "postgres": "^4.0.0",
+    "sharp": "^0.35.5",
+    "socket.io": "^4.8.4",
+    "tsx": "^4.23.15",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "h3-js": "^4.5.0",
+    "vitest": "^5.0.5"
+  }
+}

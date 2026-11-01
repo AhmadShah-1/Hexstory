@@ -1,0 +1,2 @@
+sudo -u postgres psql -c "CREATE ROLE hexstory LOGIN PASSWORD '12345'" \
+                      -c "CREATE DATABASE hexstory OWNER hexstory"

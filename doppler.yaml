@@ -1,0 +1,4 @@
+# `doppler setup` reads this so every developer gets the same project/config.
+setup:
+  - project: hexstory
+    config: dev

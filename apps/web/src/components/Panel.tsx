@@ -1,0 +1,46 @@
+import { useEffect, type ReactNode } from 'react';
+import { useNavigate } from 'react-router';
+
+/**
+ * The single floating panel that holds every view beside the map
+ * (right-hand card on desktop, bottom sheet on phones).
+ */
+export function Panel({ title, subtitle, back, children, footer, wide = false }: {
+  title: ReactNode;
+  subtitle?: ReactNode;
+  back?: { label: string; to: string | number };
+  children: ReactNode;
+  footer?: ReactNode;
+  wide?: boolean;
+}) {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !document.querySelector('dialog[open]')) navigate('/');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [navigate]);
+
+  return (
+    <aside className={`panel ${wide ? 'panel-wide' : ''}`} aria-label="Details">
+      <header className="panel-head">
+        <div className="panel-head-text">
+          {back && (
+            <button className="link-button back-link" onClick={() => navigate(back.to as string)}>
+              ← {back.label}
+            </button>
+          )}
+          <h1 className="panel-title">{title}</h1>
+          {subtitle && <div className="panel-subtitle">{subtitle}</div>}
+        </div>
+        <button className="icon-button" onClick={() => navigate('/')} aria-label="Close panel">
+          ×
+        </button>
+      </header>
+      <div className="panel-body">{children}</div>
+      {footer && <footer className="panel-foot">{footer}</footer>}
+    </aside>
+  );
+}
