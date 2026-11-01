@@ -9,6 +9,9 @@ export const POLICY = {
   storiesPerDay: { 0: 3, 1: 20, 2: 100, 3: 1000 } satisfies Record<TrustLevel, number>,
   /** Revisions (edits) a user can submit per 24h, by trust level. */
   editsPerDay: { 0: 10, 1: 60, 2: 300, 3: 5000 } satisfies Record<TrustLevel, number>,
+  /** API requests per client IP per minute, across all instances. */
+  requestsPerMinute: 300,
+  /** Upload slots a user can request per hour (completing allows twice this, for retries). */
   uploadsPerHour: 20,
   reportsPerDay: 30,
   /** Socket.IO events (join/leave/send) one connection may emit per 10 seconds before being dropped. */

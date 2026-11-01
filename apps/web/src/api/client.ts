@@ -11,15 +11,15 @@ export class ApiError extends Error {
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
-export async function api<T>(path: string, options: { method?: Method; body?: unknown; form?: FormData } = {}): Promise<T> {
-  const { method = 'GET', body, form } = options;
+export async function api<T>(path: string, options: { method?: Method; body?: unknown } = {}): Promise<T> {
+  const { method = 'GET', body } = options;
   let res: Response;
   try {
     res = await fetch(path, {
       method,
       credentials: 'same-origin',
       headers: body !== undefined ? { 'content-type': 'application/json' } : undefined,
-      body: form ?? (body !== undefined ? JSON.stringify(body) : undefined),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
     throw new ApiError(0, 'network', 'Could not reach Hexstory. Check your connection.');

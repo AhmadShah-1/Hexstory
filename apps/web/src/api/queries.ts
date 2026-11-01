@@ -11,9 +11,11 @@ import type {
   StoryDetail,
   StoryRevision,
   StorySummary,
+  UploadTicket,
+  UploadedImage,
   WatchtowerData,
 } from '@hexstory/shared';
-import { api } from './client';
+import { ApiError, api } from './client';
 
 /** All query keys in one place so invalidation stays consistent. */
 export const keys = {
@@ -178,10 +180,25 @@ export function useDeleteAccount() {
   });
 }
 
-export async function uploadImage(file: File) {
-  const form = new FormData();
-  form.append('file', file);
-  return api<{ imageKey: string; imageUrl: string; thumbUrl: string }>('/api/uploads', { method: 'POST', form });
+/**
+ * Uploads go straight from the browser to private staging storage (a pre-signed R2 URL in
+ * production, the API itself locally), then the API validates and publishes the image.
+ */
+export async function uploadImage(file: File): Promise<UploadedImage> {
+  const ticket = await api<UploadTicket>('/api/uploads', { method: 'POST', body: { size: file.size } });
+  let res: Response;
+  try {
+    res = await fetch(ticket.upload.url, {
+      method: ticket.upload.method,
+      headers: ticket.upload.headers,
+      body: file,
+      credentials: 'same-origin',
+    });
+  } catch {
+    throw new ApiError(0, 'network', 'The upload did not go through. Check your connection and try again.');
+  }
+  if (!res.ok) throw new ApiError(res.status, 'upload', 'The upload did not go through. Please try again.');
+  return api<UploadedImage>(`/api/uploads/${ticket.id}/complete`, { method: 'POST', body: {} });
 }
 
 export const signInUrl = (returnTo: string) => `/auth/google?returnTo=${encodeURIComponent(returnTo)}`;

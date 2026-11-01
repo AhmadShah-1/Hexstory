@@ -8,5 +8,7 @@ moderation rules, security, UI decisions, procedures).
 
 - Monorepo: `packages/shared` (types, Zod schemas, hex/date helpers), `apps/api` (Fastify), `apps/web` (React).
 - Secrets come from Doppler (`doppler run --`); never write secrets to files.
-- Schema changes: add a new `apps/api/migrations/NNN_name.sql`; never edit an applied migration.
+- Schema changes: add a new `apps/api/migrations/NNN_name.sql`; never edit an applied migration. The app never
+  migrates on startup; deployments need an explicit migrate step (`docs/DEPLOYMENT.md` §6).
+- Deployment (Vercel, Neon, R2, Redis Cloud) is documented in `docs/DEPLOYMENT.md`; keep it in sync too.
 - Run `npm run typecheck` and `npm test` before finishing (API tests need `TEST_DATABASE_URL`).

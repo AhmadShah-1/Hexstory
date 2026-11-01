@@ -6,3 +6,6 @@ dist/
 uploads/
 *.log
 .DS_Store
+dist-static/
+uploads-staging/
+.vercel/

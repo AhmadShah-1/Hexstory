@@ -133,9 +133,25 @@ export interface ServerToClientEvents {
   message: (msg: ChatMessage) => void;
   presence: (data: { cell: string; count: number }) => void;
   hidden: (data: { id: string }) => void;
+  /** The server may have missed live events (its Redis link dropped); clients should refetch history. */
+  resync: () => void;
 }
 export interface ClientToServerEvents {
-  join: (cell: string) => void;
+  /** The ack fires once the socket is in the room, so history fetched afterwards can't miss a message. */
+  join: (cell: string, ack?: () => void) => void;
   leave: (cell: string) => void;
-  send: (data: { cell: string; body: string }, ack: (res: { ok: true } | { ok: false; error: string }) => void) => void;
+  send: (data: { cell: string; body: string }, ack: (res: SendResult) => void) => void;
+}
+/** `delayed`: the message was saved but could not be relayed live to other servers. */
+export type SendResult = { ok: true; delayed?: boolean } | { ok: false; error: string };
+
+/** Where the browser uploads an image original before the server processes it. */
+export interface UploadTicket {
+  id: string;
+  upload: { url: string; method: 'PUT'; headers: Record<string, string> };
+}
+export interface UploadedImage {
+  imageKey: string;
+  imageUrl: string;
+  thumbUrl: string;
 }

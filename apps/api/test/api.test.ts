@@ -3,8 +3,9 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cellToParent } from 'h3-js';
-import { TRUST, type StoryDetail, type StorySummary } from '@hexstory/shared';
-import { ORIGIN, PARIS, makeUser, setup, storyInput } from './helpers.js';
+import { LIMITS, TRUST, type StoryDetail, type StorySummary } from '@hexstory/shared';
+import { createLocalStorage, type Storage } from '../src/storage/index.js';
+import { ORIGIN, PARIS, buildTestApp, makeUser, setup, storyInput, uploadBytes } from './helpers.js';
 
 let ctx: Awaited<ReturnType<typeof setup>>;
 
@@ -251,46 +252,82 @@ describe('rich content', () => {
 });
 
 describe('uploads', () => {
-  it('re-encodes images to WebP and strips metadata', async () => {
+  it('re-encodes images to WebP, strips metadata and discards the original', async () => {
     const user = await makeUser(ctx.sql);
-    const png = await sharp({ create: { width: 400, height: 300, channels: 3, background: '#c66' } })
+    const jpeg = await sharp({ create: { width: 400, height: 300, channels: 3, background: '#c66' } })
       .withMetadata({ exif: { IFD0: { Copyright: 'secret-location' } } })
       .jpeg()
       .toBuffer();
-    const boundary = '----hexstory';
-    const payload = Buffer.concat([
-      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="a.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`),
-      png,
-      Buffer.from(`\r\n--${boundary}--\r\n`),
-    ]);
-    const res = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/uploads',
-      headers: { ...user.headers, 'content-type': `multipart/form-data; boundary=${boundary}` },
-      payload,
-    });
-    expect(res.statusCode).toBe(201);
-    const { imageKey } = res.json();
+    const { ticket, put, done } = await uploadBytes(ctx.app, user.headers, jpeg);
+    expect(put.statusCode).toBe(200);
+    expect(done.statusCode).toBe(201);
+    const { imageKey } = done.json();
+    expect(imageKey).toBe(ticket.id);
     const file = join(ctx.uploadDir, `${imageKey}.webp`);
     expect(existsSync(file)).toBe(true);
     const meta = await sharp(file).metadata();
     expect(meta.format).toBe('webp');
     expect(meta.exif).toBeUndefined();
+    expect(existsSync(join(`${ctx.uploadDir}-staging`, user.id, ticket.id))).toBe(false);
   });
 
   it('rejects files that are not images', async () => {
     const user = await makeUser(ctx.sql);
-    const boundary = '----hexstory';
-    const payload = Buffer.from(
-      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="a.jpg"\r\nContent-Type: image/jpeg\r\n\r\n<script>alert(1)</script>\r\n--${boundary}--\r\n`,
-    );
-    const res = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/uploads',
-      headers: { ...user.headers, 'content-type': `multipart/form-data; boundary=${boundary}` },
-      payload,
-    });
+    const { done } = await uploadBytes(ctx.app, user.headers, Buffer.from('<script>alert(1)</script>'));
+    expect(done.statusCode).toBe(400);
+    expect(done.json().error).toBe('bad-image');
+  });
+
+  it('refuses originals over the size limit before handing out an upload URL', async () => {
+    const user = await makeUser(ctx.sql);
+    const res = await ctx.app.inject({ method: 'POST', url: '/api/uploads', headers: user.headers, payload: { size: LIMITS.imageBytesMax + 1 } });
     expect(res.statusCode).toBe(400);
+  });
+
+  it("never lets a user complete someone else's upload, and completes each upload once", async () => {
+    const owner = await makeUser(ctx.sql);
+    const other = await makeUser(ctx.sql);
+    const jpeg = await sharp({ create: { width: 64, height: 48, channels: 3, background: '#468' } }).jpeg().toBuffer();
+    const ticket = (await ctx.app.inject({ method: 'POST', url: '/api/uploads', headers: owner.headers, payload: { size: jpeg.length } })).json();
+    await ctx.app.inject({ method: 'PUT', url: ticket.upload.url, headers: { ...owner.headers, ...ticket.upload.headers }, payload: jpeg });
+
+    const stolen = await ctx.app.inject({ method: 'POST', url: `/api/uploads/${ticket.id}/complete`, headers: other.headers, payload: {} });
+    expect(stolen.statusCode).toBe(404);
+    const done = await ctx.app.inject({ method: 'POST', url: `/api/uploads/${ticket.id}/complete`, headers: owner.headers, payload: {} });
+    expect(done.statusCode).toBe(201);
+    const again = await ctx.app.inject({ method: 'POST', url: `/api/uploads/${ticket.id}/complete`, headers: owner.headers, payload: {} });
+    expect(again.statusCode).toBe(404);
+  });
+
+  it('reports a storage failure instead of success and leaves no half-published image', async () => {
+    const user = await makeUser(ctx.sql);
+    const storage = createLocalStorage(ctx.uploadDir);
+    const deleted: string[] = [];
+    let puts = 0;
+    const failing: Storage = {
+      ...storage,
+      put: async (name, data, type) => {
+        // The thumbnail write fails after the full-size image was written.
+        if (++puts === 2) throw new Error('R2 upload of thumb failed with HTTP 500');
+        await storage.put(name, data, type);
+      },
+      delete: async (name) => {
+        deleted.push(name);
+        await storage.delete(name);
+      },
+    };
+    const app = await buildTestApp(ctx.sql, { storage: failing });
+    try {
+      const jpeg = await sharp({ create: { width: 64, height: 48, channels: 3, background: '#468' } }).jpeg().toBuffer();
+      const { ticket, done } = await uploadBytes(app, user.headers, jpeg);
+      expect(done.statusCode).toBe(502);
+      expect(deleted.sort()).toEqual([`${ticket.id}-thumb.webp`, `${ticket.id}.webp`]);
+      expect(existsSync(join(ctx.uploadDir, `${ticket.id}.webp`))).toBe(false);
+      // The original is kept so the browser can retry the last step.
+      expect(existsSync(join(`${ctx.uploadDir}-staging`, user.id, ticket.id))).toBe(true);
+    } finally {
+      await app.close();
+    }
   });
 });
 
@@ -390,17 +427,5 @@ describe('security regressions', () => {
 
 async function uploadTestImage(headers: Record<string, string>): Promise<string> {
   const jpeg = await sharp({ create: { width: 64, height: 48, channels: 3, background: '#468' } }).jpeg().toBuffer();
-  const boundary = '----hexstory';
-  const payload = Buffer.concat([
-    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="a.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`),
-    jpeg,
-    Buffer.from(`\r\n--${boundary}--\r\n`),
-  ]);
-  const res = await ctx.app.inject({
-    method: 'POST',
-    url: '/api/uploads',
-    headers: { ...headers, 'content-type': `multipart/form-data; boundary=${boundary}` },
-    payload,
-  });
-  return res.json().imageKey;
+  return (await uploadBytes(ctx.app, headers, jpeg)).done.json().imageKey;
 }

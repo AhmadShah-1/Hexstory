@@ -48,7 +48,9 @@ export const moderationRoutes =
       const { id } = parse(idParams, req.params);
       const body = parse(z.object({ reason }), req.body ?? {});
       const { cell } = await hideMessage(sql, user, id, body.reason ?? null);
-      square.messageHidden(cell, id);
+      // The database is authoritative: if the live relay fails, clients drop the message when they
+      // next refetch history (on reconnect or resync).
+      await square.messageHidden(cell, id).catch((err) => req.log.error({ err }, 'square: hide relay failed'));
       return { ok: true };
     });
 

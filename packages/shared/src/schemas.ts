@@ -112,3 +112,8 @@ export const chatMessageSchema = z.object({
   cell: z.string().refine(isDisplayCell),
   body: trimmed(1, LIMITS.chatMessageMax),
 });
+
+/** Asks for an upload slot; the exact size is signed into the upload URL. */
+export const uploadIntentSchema = z.object({
+  size: z.number().int().min(1).max(LIMITS.imageBytesMax, 'Images must be smaller than 6 MB.'),
+});

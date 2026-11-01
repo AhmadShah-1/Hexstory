@@ -23,8 +23,11 @@ const toMessage = (r: { id: string; cell: string; userId: string; displayName: s
   createdAt: r.createdAt.toISOString(),
 });
 
-/** Why a user can't post in the Square right now, or null if they can. */
-export function chatBlockReason(user: SessionUser | null, lastSentAt: number | undefined): string | null {
+/**
+ * Why a user can't post in the Square right now, or null if they can. The cooldown between
+ * messages lives in shared state and is checked separately.
+ */
+export function chatBlockReason(user: SessionUser | null): string | null {
   if (!user) return 'Sign in to join the conversation.';
   if (user.bannedAt) return 'Your account has been suspended.';
   if (!user.termsAcceptedAt) return 'Please accept the terms first.';
@@ -33,7 +36,6 @@ export function chatBlockReason(user: SessionUser | null, lastSentAt: number | u
     const minutes = Math.ceil((POLICY.chatMinAccountAgeMs - ageMs) / 60_000);
     return `New accounts can post in the Square after a few minutes (${minutes} min left). You can read along meanwhile.`;
   }
-  if (lastSentAt && Date.now() - lastSentAt < POLICY.chatIntervalMs) return 'Slow down a little.';
   return null;
 }
 

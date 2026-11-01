@@ -8,7 +8,7 @@ Everything about how it works (architecture, moderation rules, security, procedu
 
 ## Quick start
 
-Requirements: Node 22+, PostgreSQL 14+, the [Doppler CLI](https://docs.doppler.com/docs/install-cli).
+Requirements: Node 24, PostgreSQL 14+, the [Doppler CLI](https://docs.doppler.com/docs/install-cli).
 
 ```bash
 npm install
@@ -18,4 +18,11 @@ npm run dev                   # migrates the DB, starts API (:3000) + web (:5173
 
 Open http://localhost:5173. Optional sample content: `doppler run -- npm run seed -w @hexstory/api`.
 
-See `.env.example` for the secrets Doppler needs to provide, and DESIGN.md → "Running it" for details.
+See `.env.example` for the variables Doppler provides, and DESIGN.md → "Running it" for details.
+Local development needs no cloud services (images on disk, chat coordination in memory).
+
+## Deploying
+
+Production runs on Vercel with Neon Postgres, Cloudflare R2 and Redis Cloud. Step-by-step setup, the
+release procedure (migrations are an explicit step) and a smoke-test checklist are in
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).

@@ -14,6 +14,7 @@ export function Square({ cell }: { cell: string }) {
   const user = session.data?.user;
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -27,9 +28,11 @@ export function Square({ cell }: { cell: string }) {
     if (!body) return;
     setSending(true);
     setError(null);
+    setNotice(null);
     try {
-      await send(body);
+      const { delayed } = await send(body);
       setDraft('');
+      if (delayed) setNotice('Sent, but it may take a moment to reach everyone.');
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -68,6 +71,7 @@ export function Square({ cell }: { cell: string }) {
             Send
           </button>
           {error && <p className="error-text square-error">{error}</p>}
+          {notice && <p className="muted square-error">{notice}</p>}
         </form>
       ) : (
         <SignInPrompt reason="Sign in to join the conversation." />

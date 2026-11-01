@@ -11,7 +11,7 @@ const config = loadConfig();
 if (config.NODE_ENV === 'production') throw new Error('Refusing to seed a production database');
 
 const sql = createDb(config.DATABASE_URL);
-await migrate(sql);
+await migrate(sql, { environment: config.DEPLOY_ENV });
 
 const [existing] = await sql`SELECT 1 FROM stories LIMIT 1`;
 if (existing) {

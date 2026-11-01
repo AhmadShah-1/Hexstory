@@ -2,15 +2,16 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
-import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyError } from 'fastify';
 import { googleAuthRoutes } from './auth/google.js';
 import { SESSION_COOKIE, getSessionUser } from './auth/sessions.js';
 import type { Config } from './config.js';
+import type { Coordinator } from './coordination.js';
 import type { Sql } from './db.js';
 import { HttpError, forbidden } from './errors.js';
+import { POLICY } from './policy.js';
 import './http.js';
 import { attachSquare } from './realtime/square.js';
 import { cellRoutes } from './routes/cells.js';
@@ -26,7 +27,28 @@ const MAP_ORIGINS = ['https://tiles.openfreemap.org'];
 const WEB_DIST = fileURLToPath(new URL('../../web/dist/', import.meta.url));
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-export async function buildApp({ config, sql, storage }: { config: Config; sql: Sql; storage: Storage }) {
+/** Page navigations get the SPA; API paths and anything that looks like a file get a real 404. */
+export function isPageRequest(method: string, url: string): boolean {
+  const path = url.split('?')[0]!;
+  return (method === 'GET' || method === 'HEAD') && !/^\/(api|auth|media|socket\.io|assets)(\/|$)/.test(path) && !/\.[a-z0-9]+$/i.test(path);
+}
+
+export async function buildApp({
+  config,
+  sql,
+  storage,
+  coordinator,
+  heartbeatMs,
+}: {
+  config: Config;
+  sql: Sql;
+  storage: Storage;
+  coordinator: Coordinator;
+  /** Presence refresh interval; only tests change it. */
+  heartbeatMs?: number;
+}) {
+  const imageOrigins = storage.imageOrigin ? [storage.imageOrigin] : [];
+  const uploadOrigins = storage.uploadOrigin ? [storage.uploadOrigin] : [];
   const app = Fastify({
     logger: config.NODE_ENV === 'test' ? false : { level: config.NODE_ENV === 'production' ? 'info' : 'debug' },
     trustProxy: config.TRUST_PROXY,
@@ -40,8 +62,8 @@ export async function buildApp({ config, sql, storage }: { config: Config; sql: 
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", 'data:', 'blob:', ...MAP_ORIGINS],
-        connectSrc: ["'self'", ...MAP_ORIGINS],
+        imgSrc: ["'self'", 'data:', 'blob:', ...MAP_ORIGINS, ...imageOrigins],
+        connectSrc: ["'self'", ...MAP_ORIGINS, ...uploadOrigins],
         workerSrc: ["'self'", 'blob:'],
         fontSrc: ["'self'"],
         objectSrc: ["'none'"],
@@ -52,8 +74,17 @@ export async function buildApp({ config, sql, storage }: { config: Config; sql: 
     },
     crossOriginEmbedderPolicy: false,
   });
-  await app.register(rateLimit, { global: true, max: 300, timeWindow: '1 minute', hook: 'preHandler' });
-  await app.register(multipart);
+  await app.register(rateLimit, {
+    global: true,
+    max: POLICY.requestsPerMinute,
+    timeWindow: '1 minute',
+    hook: 'preHandler',
+    // Shared across instances when Redis is configured. If Redis is unreachable, requests are let
+    // through rather than failing the whole site; per-user daily limits still live in PostgreSQL.
+    redis: coordinator.rateLimitRedis ?? undefined,
+    nameSpace: `${coordinator.keyPrefix}rl:`,
+    skipOnError: true,
+  });
 
   app.decorateRequest('user', null);
   app.addHook('onRequest', async (req) => {
@@ -81,8 +112,8 @@ export async function buildApp({ config, sql, storage }: { config: Config; sql: 
     return reply.code(500).send({ error: 'internal', message: 'Something went wrong on our side. Please try again.' });
   });
 
-  const square = attachSquare(app.server, { sql, appOrigin: config.APP_ORIGIN });
-  app.addHook('onClose', () => square.close());
+  const square = await attachSquare(app.server, { sql, appOrigin: config.APP_ORIGIN, coordinator, log: app.log, heartbeatMs });
+  app.addHook('preClose', () => square.close());
   const deps: Deps = { config, sql, storage, square };
 
   await app.register(googleAuthRoutes({ sql, config }));
@@ -108,8 +139,7 @@ export async function buildApp({ config, sql, storage }: { config: Config; sql: 
     await app.register(fastifyStatic, { root: WEB_DIST, prefix: '/', wildcard: false });
   }
   app.setNotFoundHandler((req, reply) => {
-    const isPage = (req.method === 'GET' || req.method === 'HEAD') && !/^\/(api|auth|media|socket\.io)\//.test(req.url);
-    if (serveWeb && isPage) return reply.sendFile('index.html', WEB_DIST);
+    if (serveWeb && isPageRequest(req.method, req.url)) return reply.sendFile('index.html', WEB_DIST);
     return reply.code(404).send({ error: 'not-found', message: 'Not found.' });
   });
 
