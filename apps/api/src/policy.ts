@@ -15,6 +15,10 @@ export const POLICY = {
   reportsPerDay: RULES.reportsPerDay,
   /** Socket.IO events (join/leave/send) one connection may emit per 10 seconds before being dropped. */
   socketEventsPer10s: 30,
+  /** Open Square connections one address may hold on one instance. */
+  socketConnectionsPerIp: 20,
+  /** New Square connections one address may open per minute, across all instances. */
+  socketHandshakesPerMinute: 60,
   /** Minimum gap between chat messages from one user. */
   chatIntervalMs: 2_000,
   largeRemovalRatio: RULES.largeRemovalPercent / 100,

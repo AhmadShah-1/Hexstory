@@ -213,13 +213,17 @@ function describeAction(e: AuditEntry): string {
     case 'reject': return 'rejected an edit';
     case 'approve': return 'approved and published a story';
     case 'hide': return e.targetType === 'comment' ? 'hid a chat message' : 'hid a story';
-    case 'unhide': return 'brought back a hidden story';
+    case 'unhide': return e.details?.to === 'unreviewed' ? 'returned a hidden story to the review queue' : 'brought back a hidden story';
     case 'restore': return 'restored an earlier version';
     case 'rollback': return 'rolled back a story';
     case 'remove-version': return 'removed a version from the history';
     case 'restore-version': return 'put back a removed version';
     case 'protect':
-      if (arg && arg in PROTECTION_NAMES) return `set who can edit without review to ${PROTECTION_NAMES[arg]}`;
+      if (arg && arg in PROTECTION_NAMES) {
+        const from = e.details?.from;
+        const was = typeof from === 'number' && String(from) in PROTECTION_NAMES ? ` (was ${PROTECTION_NAMES[String(from)]})` : '';
+        return `set who can edit without review to ${PROTECTION_NAMES[arg]}${was}`;
+      }
       break;
     case 'report':
       if (arg === 'dismissed') return 'dismissed a report';
@@ -235,7 +239,12 @@ function describeAction(e: AuditEntry): string {
       if (arg === 'declined') return 'declined the ban requests for an account';
       break;
     case 'trust':
-      if (arg === 'auto') return 'returned their level to automatic';
+      if (arg === 'auto') {
+        const to = e.details?.to;
+        return typeof to === 'number' && to in TRUST_NAMES
+          ? `returned their level to automatic (now ${TRUST_NAMES[to as TrustLevel]})`
+          : 'returned their level to automatic';
+      }
       if (arg === '0' || arg === '1' || arg === '2') return `set their level to ${TRUST_NAMES[Number(arg) as TrustLevel]}`;
       break;
     case 'delete-user': return `deleted an account${removed}`;

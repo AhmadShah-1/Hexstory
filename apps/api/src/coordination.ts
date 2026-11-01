@@ -23,6 +23,8 @@ export interface Coordinator {
   subscribe(onEvent: (event: RoomEvent) => void, onGap: () => void): Promise<void>;
   /** Atomically takes `key` for `ttlMs`. False if someone already holds it (cooldowns). */
   claim(key: string, ttlMs: number): Promise<boolean>;
+  /** Counts a hit in a fixed window shared by all instances; returns the count so far in this window. */
+  hit(key: string, windowMs: number): Promise<number>;
   /** Marks members present in a room until `ttlMs` from now; members that stop refreshing expire. */
   touchPresence(cell: string, members: string[], ttlMs: number): Promise<void>;
   removePresence(cell: string, member: string): Promise<void>;
@@ -46,6 +48,7 @@ export interface Coordinator {
 export function createMemoryCoordinator(): Coordinator {
   const handlers: ((event: RoomEvent) => void)[] = [];
   const claims = new Map<string, number>();
+  const hits = new Map<string, { count: number; until: number }>();
   const presence = new Map<string, Map<string, number>>();
   // Stored as JSON text so callers never share (and mutate) the same object.
   const values = new Map<string, { json: string; until: number }>();
@@ -68,6 +71,16 @@ export function createMemoryCoordinator(): Coordinator {
     },
     async subscribe(onEvent) {
       handlers.push(onEvent);
+    },
+    async hit(key, windowMs) {
+      const now = Date.now();
+      const entry = hits.get(key);
+      if (!entry || entry.until <= now) {
+        if (hits.size > 10_000) for (const [k, v] of hits) if (v.until <= now) hits.delete(k);
+        hits.set(key, { count: 1, until: now + windowMs });
+        return 1;
+      }
+      return ++entry.count;
     },
     async claim(key, ttlMs) {
       const now = Date.now();
@@ -145,6 +158,12 @@ export function createRedisCoordinator(client: Redis, subscriber: Redis, keyPref
     },
     async claim(key, ttlMs) {
       return (await client.set(`${keyPrefix}${key}`, '1', 'PX', ttlMs, 'NX')) === 'OK';
+    },
+    async hit(key, windowMs) {
+      const k = `${keyPrefix}${key}`;
+      // Start the window only if there isn't one, then count.
+      const [, count] = (await execOrThrow(client.multi().set(k, '0', 'PX', windowMs, 'NX').incr(k))) as [unknown, number];
+      return count;
     },
     async touchPresence(cell, members, ttlMs) {
       if (members.length === 0) return;

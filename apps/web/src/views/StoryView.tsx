@@ -9,7 +9,8 @@ import { ReportDialog } from '../components/ReportDialog';
 import { StoryContent } from '../components/StoryContent';
 import { useToast } from '../components/Toast';
 import { useMapState } from '../map/MapContext';
-import { NotFound } from './NotFound';
+import { ConfirmAction } from '../components/ConfirmAction';
+import { LoadFailed, NotFound } from './NotFound';
 
 export function StoryView() {
   const { id = '' } = useParams();
@@ -30,12 +31,14 @@ export function StoryView() {
   }, [cells, fromCell, setStoryCells, focusCells]);
 
   if (story.isLoading) return <Panel title="Loading…"><p className="muted pad">Loading story…</p></Panel>;
-  if (!story.data) return <NotFound what="story" />;
+  if (!story.data) return story.error ? <LoadFailed error={story.error} what="story" retry={() => story.refetch()} /> : <NotFound what="story" />;
   const { revision, can, pendingCount, status, createdBy } = story.data;
   const viewer = session.data?.user;
   const signedIn = !!viewer;
+  // A story with no current version shows its first one: held (waiting) or turned down (not accepted).
+  const notAccepted = revision.status === 'rejected';
   // Not public yet: a newcomer's story awaiting approval, or a story whose first version is held.
-  const waiting = status === 'unreviewed' || revision.status === 'pending';
+  const waiting = !notAccepted && (status === 'unreviewed' || revision.status === 'pending');
 
   const share = async () => {
     const url = `${window.location.origin}/s/${id}`;
@@ -51,11 +54,14 @@ export function StoryView() {
     <Panel
       title="Story"
       back={fromCell ? { label: 'Stories in this region', to: `/h/${fromCell}` } : undefined}
-      subtitle={status === 'hidden' ? 'Hidden from the public' : waiting
+      subtitle={status === 'hidden' ? 'Hidden from the public' : notAccepted ? 'Not accepted · not public' : waiting
         ? `Waiting for a reviewer · ${viewer?.id === createdBy.id ? 'only you and reviewers can see it' : 'not public yet'}`
         : undefined}
     >
       <div className="pad">
+        {notAccepted && viewer?.id === createdBy.id && (
+          <p className="notice">A reviewer didn't accept this story, so it won't be published. You can write a new one.</p>
+        )}
         {waiting && viewer?.id === createdBy.id && (
           <p className="notice">
             Your story will be published once a reviewer approves it.
@@ -89,6 +95,7 @@ export function StoryView() {
           <ReviewerTools
             storyId={id}
             revisionId={revision.id}
+            revisionStatus={revision.status}
             status={status}
             createdBy={createdBy}
             isOwn={viewer?.id === createdBy.id}
@@ -104,9 +111,10 @@ export function StoryView() {
   );
 }
 
-function ReviewerTools({ storyId, revisionId, status, createdBy, isOwn, protectionLevel, isModerator, onStale }: {
+function ReviewerTools({ storyId, revisionId, revisionStatus, status, createdBy, isOwn, protectionLevel, isModerator, onStale }: {
   storyId: string;
   revisionId: string;
+  revisionStatus: string;
   status: string;
   createdBy: { id: string; displayName: string };
   isOwn: boolean;
@@ -138,20 +146,42 @@ function ReviewerTools({ storyId, revisionId, status, createdBy, isOwn, protecti
         </p>
       )}
       <div className="action-row">
-        {status === 'unreviewed' && !isOwn && (
+        {status === 'unreviewed' && !isOwn && revisionStatus === 'accepted' && (
           <button className="button button-primary" disabled={setStatus.isPending} onClick={approve}>Approve and publish</button>
         )}
+        {/* Its first version is held: reviewing that version is what publishes the story. */}
+        {status === 'unreviewed' && !isOwn && revisionStatus === 'pending' && (
+          <Link className="button button-primary" to={`/v/${revisionId}`}>Review the first version</Link>
+        )}
         {status === 'hidden' ? (
-          isModerator && <button className="button" onClick={() => setStatus.mutate({ status: 'active' })}>Unhide</button>
+          isModerator && (
+            <button
+              className="button"
+              disabled={setStatus.isPending}
+              onClick={() => setStatus.mutate({ status: 'active' }, {
+                onSuccess: (res) => toast(res.status === 'unreviewed' ? 'Back in the review queue: it was never approved.' : 'Brought back. The story is public again.'),
+              })}
+            >
+              Unhide
+            </button>
+          )
         ) : (
-          <button className="button button-danger" onClick={() => setStatus.mutate({ status: 'hidden' })}>Hide story</button>
+          <ConfirmAction
+            label="Hide story"
+            explain={isModerator
+              ? 'Hidden stories are visible only to reviewers. Open reports about it are closed.'
+              : 'Hidden stories are visible only to reviewers, and only a moderator can bring it back. Open reports about it are closed.'}
+            busy={setStatus.isPending}
+            onConfirm={(reason, done) => setStatus.mutate({ status: 'hidden', reason }, { onSuccess: () => { toast('Story hidden'); done(); } })}
+          />
         )}
       </div>
       {isModerator && (
         <label className="field">
           <span>Who can edit without review</span>
           <select
-            value={protectionLevel}
+            // Level 1 means the same as the default (Members), so it shows as such.
+            value={protectionLevel <= TRUST.MEMBER ? 0 : protectionLevel}
             onChange={(e) => setProtection.mutate(Number(e.target.value) as 0 | 1 | 2 | 3)}
           >
             <option value={0}>Members (default)</option>

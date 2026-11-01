@@ -62,7 +62,8 @@ export function ModSettings() {
   return (
     <form className="mod-settings" onSubmit={submit} noValidate>
       <p className="small muted">
-        Changes apply to everyone within a minute, and the <Link to="/about">About page</Link> shows the new numbers.
+        Changes are enforced everywhere within a minute; the <Link to="/about">About page</Link> shows the new numbers
+        to people who open it afterwards (pages already open catch up within a few minutes).
         Promotion is re-checked the next time someone contributes or signs in. Lowering a requirement never demotes
         anyone, and people whose level a moderator set by hand aren't affected.
       </p>

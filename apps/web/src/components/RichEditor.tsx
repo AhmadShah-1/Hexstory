@@ -181,7 +181,11 @@ export function RichEditor({ initial, onChange }: { initial: RichDoc; onChange: 
                 e.preventDefault();
                 applyLink();
               }
-              if (e.key === 'Escape') setPanel('none');
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                setPanel('none');
+              }
             }}
             placeholder="Paste a link, e.g. https://example.org/article"
             aria-label="Link address"

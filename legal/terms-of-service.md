@@ -1,6 +1,6 @@
 # Terms of Service
 
-_Last updated: [DATE]_
+_Last updated: 1 November 2026_
 
 Welcome to Hexstory ("the Service", "we", "us"). By creating an account or using the Service
 you agree to these Terms. If you do not agree, do not use the Service.
@@ -79,7 +79,7 @@ hide or remove any content; restrict editing on any article; limit, suspend or b
 We are not obligated to monitor content and do not endorse anything posted. Moderation
 decisions may be logged publicly.
 
-To report content, use the Report button or contact [CONTACT EMAIL].
+To report content, use the Report button or contact hexstory.world@gmail.com.
 
 ## 8. Live chat
 
@@ -90,7 +90,7 @@ messages before they are removed.
 ## 9. Copyright complaints
 
 If you believe content on the Service infringes your copyright, send a notice to
-[CONTACT EMAIL] including: the content's URL, the work you claim is infringed, your contact
+hexstory.world@gmail.com including: the content's URL, the work you claim is infringed, your contact
 details, a statement that you believe in good faith the use is not authorized, and a statement
 under penalty of perjury that your notice is accurate and you are the owner or authorized to act
 for them. We will remove infringing content and may terminate repeat infringers.
@@ -137,4 +137,4 @@ residence gives you the right to bring claims locally.
 
 ## 16. Contact
 
-[CONTACT EMAIL]
+hexstory.world@gmail.com

@@ -76,6 +76,9 @@ export interface StoryRow {
   cellCount: number;
   createdBy: string;
   createdAt: Date;
+  /** When the story first became public, and the version public at that moment (null: never published). */
+  publishedAt: Date | null;
+  publishedRevisionId: string | null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -225,21 +228,39 @@ function assertVisible(story: StoryRow | undefined, viewer: SessionUser | null):
   if (!story || !canSeeStory(story, viewer)) throw notFound('Story');
 }
 
-/** Removed versions are kept for the record but shown only to reviewers. */
-function canSeeRevision(r: { status: RevisionStatus; authorId: string; hiddenAt: Date | null }, viewer: SessionUser | null): boolean {
-  if (r.hiddenAt) return !!viewer && canReview(viewer.trustLevel);
-  return r.status === 'accepted' || canSeeUnaccepted(viewer, r.authorId);
+/**
+ * Who may see a version. Removed versions: reviewers only. Otherwise the author and reviewers always;
+ * everyone else only accepted versions from the story's publication on (the approved version and
+ * later ones), so a newcomer's earlier drafts, which no reviewer read, never become public.
+ */
+function canSeeRevision(
+  r: { id: string; status: RevisionStatus; authorId: string; hiddenAt: Date | null; createdAt: Date },
+  story: StoryRow,
+  viewer: SessionUser | null,
+): boolean {
+  if (viewer && canReview(viewer.trustLevel)) return true;
+  if (r.hiddenAt) return false;
+  if (canSeeUnaccepted(viewer, r.authorId)) return true;
+  return r.status === 'accepted' && !!story.publishedAt && (r.id === story.publishedRevisionId || r.createdAt > story.publishedAt);
+}
+
+/** Marks a story as published (once: later approvals keep the first date and version). */
+async function markPublished(tx: Db, storyId: string, revisionId: string): Promise<void> {
+  await tx`
+    UPDATE stories SET published_at = COALESCE(published_at, now()), published_revision_id = COALESCE(published_revision_id, ${revisionId})
+    WHERE id = ${storyId}`;
 }
 
 export async function getStory({ sql, storage }: StoryDeps, id: string, viewer: SessionUser | null): Promise<StoryDetail> {
   const story = await fetchStory(sql, id);
   assertVisible(story, viewer);
 
-  // A story whose first revision is still pending has no current revision; reviewers see the pending one.
+  // A story whose first revision is still pending (or was rejected) has no current revision; its
+  // author and reviewers see that first one.
   const [revision] = story.currentRevisionId
     ? await fetchRevisions(sql, sql`r.id = ${story.currentRevisionId}`)
     : await fetchRevisions(sql, sql`r.story_id = ${id} ORDER BY r.created_at LIMIT 1`);
-  if (!revision) throw notFound('Story');
+  if (!revision || (!story.currentRevisionId && !canSeeRevision(revision, story, viewer))) throw notFound('Story');
   const [counts] = await sql<{ pending: number; creatorName: string }[]>`
     SELECT (SELECT count(*)::int FROM story_revisions WHERE story_id = ${id} AND status = 'pending') AS pending,
            (SELECT display_name FROM users WHERE id = ${story.createdBy}) AS creator_name`;
@@ -269,7 +290,7 @@ export async function listRevisions(sql: Sql, storyId: string, viewer: SessionUs
     WHERE r.story_id = ${storyId}
     ORDER BY r.created_at DESC
     LIMIT 200`;
-  return rows.filter((r) => canSeeRevision(r, viewer)).map((r) => ({
+  return rows.filter((r) => canSeeRevision(r, story, viewer)).map((r) => ({
     id: r.id,
     author: { id: r.authorId, displayName: r.authorName },
     status: r.status,
@@ -288,7 +309,7 @@ export async function getRevision({ sql, storage }: StoryDeps, id: string, viewe
   assertVisible(story, viewer);
   // Versions that never went live (pending or rejected) may contain abuse; only reviewers and the author
   // see them. Removed versions only reviewers.
-  if (!canSeeRevision(revision, viewer)) throw notFound('Version');
+  if (!canSeeRevision(revision, story, viewer)) throw notFound('Version');
   return toRevision(storage, revision);
 }
 
@@ -345,7 +366,7 @@ type Content = Awaited<ReturnType<typeof prepareContent>>;
 
 async function insertRevision(
   tx: Db,
-  fields: Content & { story_id: string; parent_revision_id: string | null; author_id: string; status: RevisionStatus; edit_summary: string | null; flags: string[] },
+  fields: Content & { story_id: string; parent_revision_id: string | null; author_id: string; status: RevisionStatus; edit_summary: string | null; flags: string[]; origin: 'create' | 'edit' },
 ): Promise<string> {
   // postgres.js serialises the sources array for the jsonb column itself.
   const [row] = await tx<{ id: string }[]>`
@@ -364,7 +385,8 @@ async function assertWithinDailyLimit(sql: Db, user: SessionUser, kind: 'stories
   const [row] =
     kind === 'stories'
       ? await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM stories WHERE created_by = ${user.id} AND created_at > now() - interval '1 day'`
-      : await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM story_revisions WHERE author_id = ${user.id} AND created_at > now() - interval '1 day'`;
+      // Only edits: a story's first version counts as a new story, and restore/rollback copies aren't edits.
+      : await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM story_revisions WHERE author_id = ${user.id} AND origin = 'edit' AND created_at > now() - interval '1 day'`;
   if ((row?.n ?? 0) >= limit) {
     throw tooMany(`You've reached today's limit of ${limit} ${kind === 'stories' ? 'new stories' : 'edits'}. It grows as you contribute.`);
   }
@@ -393,8 +415,10 @@ export async function createStory({ sql, storage }: StoryDeps, user: SessionUser
       status: held ? 'pending' : 'accepted',
       edit_summary: null,
       flags,
+      origin: 'create',
     });
     if (!held) await applyRevision(tx, storyId, { id: revisionId, cells: content.cells });
+    if (!held && storyStatus === 'active') await markPublished(tx, storyId, revisionId);
     return { storyId, revisionId, status: held ? 'pending' : 'live', storyStatus } as const;
   });
   if (!held) await refreshTrust(sql, user.id);
@@ -445,6 +469,7 @@ export async function editStory(
       status: live ? 'accepted' : 'pending',
       edit_summary: input.editSummary ?? null,
       flags,
+      origin: 'edit',
     });
     if (live) await applyRevision(tx, storyId, { id: revisionId, cells: content.cells });
     return { storyId, revisionId, status: live ? 'live' : 'pending', storyStatus: story.status } as const;
@@ -471,6 +496,11 @@ export async function reviewRevision(
     if (decision === 'accept') {
       const story = await fetchStory(tx, rev.storyId, true);
       if (!story) throw notFound('Story');
+      if (story.status === 'hidden') throw conflict('This story is hidden. Bring it back before accepting edits to it.');
+      // Protection decides who can put changes live, by editing or by accepting someone else's edit.
+      if (user.trustLevel < liveEditThreshold(story.protectionLevel)) {
+        throw forbidden('This story is protected: only a moderator can accept edits to it.');
+      }
       if (story.currentRevisionId !== rev.parentRevisionId) {
         throw conflict('The story changed after this edit was made. Reject it and let the author resubmit.', 'stale');
       }
@@ -479,6 +509,7 @@ export async function reviewRevision(
       // reviewer has just read all of it.
       if (story.status === 'unreviewed' && rev.parentRevisionId === null) {
         await tx`UPDATE stories SET status = 'active' WHERE id = ${rev.storyId}`;
+        await markPublished(tx, rev.storyId, rev.id);
         await logModAction(tx, user.id, 'approve', 'story', rev.storyId, reason);
       }
     }
@@ -495,16 +526,24 @@ export async function reviewRevision(
 
 /**
  * Copies an earlier version into a new current revision, so history stays linear and append-only.
- * The caller holds the story's row lock.
+ * The copy is attributed to whoever made it but isn't counted as their edit. The caller holds the
+ * story's row lock.
  */
-export async function copyToNewRevision(tx: Db, story: StoryRow, sourceId: string, actorId: string, summary: string): Promise<string> {
+export async function copyToNewRevision(
+  tx: Db,
+  story: StoryRow,
+  sourceId: string,
+  actorId: string,
+  summary: string,
+  origin: 'restore' | 'rollback',
+): Promise<string> {
   const [row] = await tx<{ id: string; cells: string[] }[]>`
     INSERT INTO story_revisions (story_id, parent_revision_id, author_id, title, body, content, image_key, image_credit, cells,
       start_year, start_month, start_day, end_year, end_month, end_day, is_ongoing, is_approx, sources,
-      status, edit_summary, reviewed_by, reviewed_at)
+      status, edit_summary, reviewed_by, reviewed_at, origin)
     SELECT story_id, ${story.currentRevisionId}, ${actorId}, title, body, content, image_key, image_credit, cells,
       start_year, start_month, start_day, end_year, end_month, end_day, is_ongoing, is_approx, sources,
-      'accepted', ${summary}, ${actorId}, now()
+      'accepted', ${summary}, ${actorId}, now(), ${origin}
     FROM story_revisions WHERE id = ${sourceId} AND story_id = ${story.id}
     RETURNING id, cells`;
   if (!row) throw notFound('Version');
@@ -512,12 +551,25 @@ export async function copyToNewRevision(tx: Db, story: StoryRow, sourceId: strin
   return row.id;
 }
 
-export async function restoreRevision({ sql }: StoryDeps, user: SessionUser, storyId: string, revisionId: string): Promise<WriteResult> {
+/**
+ * `baseRevisionId` is the version that was current when the reviewer chose to restore: if the story has
+ * moved on since (another restore, a double click), nothing is copied (409).
+ */
+export async function restoreRevision(
+  { sql }: StoryDeps,
+  user: SessionUser,
+  storyId: string,
+  revisionId: string,
+  baseRevisionId?: string | null,
+): Promise<WriteResult> {
   if (!canReview(user.trustLevel)) throw forbidden();
   return sql.begin(async (tx) => {
     const story = await fetchStory(tx, storyId, true);
     if (!story) throw notFound('Story');
     if (user.trustLevel < liveEditThreshold(story.protectionLevel)) throw forbidden('This story is protected.');
+    if (baseRevisionId && baseRevisionId !== story.currentRevisionId) {
+      throw conflict('The story changed since you opened this page. Reload and check before restoring.', 'stale');
+    }
     const old = await fetchRevision(tx, revisionId);
     // Removed versions are out of the history for good.
     if (!old || old.storyId !== storyId || old.hiddenAt) throw notFound('Version');
@@ -525,15 +577,17 @@ export async function restoreRevision({ sql }: StoryDeps, user: SessionUser, sto
     if (old.status !== 'accepted') throw badRequest('Only versions that were accepted can be restored.');
     if (old.id === story.currentRevisionId) throw badRequest('That is already the current version.');
 
-    const newId = await copyToNewRevision(tx, story, revisionId, user.id, `Restored the version from ${old.createdAt.toISOString().slice(0, 10)}`);
-    await logModAction(tx, user.id, 'restore', 'story', storyId, null, { revisionId });
+    const newId = await copyToNewRevision(tx, story, revisionId, user.id, `Restored the version from ${old.createdAt.toISOString().slice(0, 10)}`, 'restore');
+    await logModAction(tx, user.id, 'restore', 'story', storyId, null, { revisionId, newRevisionId: newId });
     return { storyId, revisionId: newId, status: 'live', storyStatus: story.status } as const;
   });
 }
 
 /**
  * Approve (publish) a story waiting for review, hide a story, or (moderators) bring a hidden one back.
- * `revisionId` is the version the reviewer read: approval fails if the author changed it since.
+ * `revisionId` is the version the reviewer read: approval fails if the author changed it since, or if
+ * someone already decided (published or rejected) the story. Bringing back a story that was never
+ * published returns it to the review queue rather than publishing it. Returns the new status.
  */
 export async function setStoryStatus(
   sql: Sql,
@@ -542,34 +596,59 @@ export async function setStoryStatus(
   status: 'active' | 'hidden',
   reason: string | null,
   revisionId?: string | null,
-) {
+): Promise<StoryStatus> {
   if (!canReview(user.trustLevel)) throw forbidden();
-  const approvedCreator = await sql.begin(async (tx) => {
+  const result = await sql.begin(async (tx) => {
     const story = await fetchStory(tx, storyId, true);
     if (!story) throw notFound('Story');
-    if (story.status === 'hidden' && status === 'active') {
+    if (status === 'hidden') {
+      if (story.status === 'hidden') throw conflict('This story is already hidden.', 'already-decided');
+      await tx`UPDATE stories SET status = 'hidden', updated_at = now() WHERE id = ${storyId}`;
+      await closeReportsAbout(tx, user.id, 'story', [storyId]);
+      await logModAction(tx, user.id, 'hide', 'story', storyId, reason);
+      return { status: 'hidden' as StoryStatus, approvedCreator: null };
+    }
+
+    // An approval (it carries the version read) never un-hides: someone already rejected the story.
+    if (revisionId && story.status !== 'unreviewed') {
+      throw conflict(story.status === 'hidden' ? 'A reviewer already rejected this story.' : 'This story is already published.', 'already-decided');
+    }
+    if (story.status === 'active') throw conflict('This story is already published.', 'already-decided');
+
+    if (story.status === 'hidden') {
       if (user.trustLevel < TRUST.MODERATOR) throw forbidden('Only moderators can bring back a hidden story.');
+      if (!story.currentRevisionId) throw conflict('Its first version was never accepted, so there is nothing to bring back.');
       const [current] = await tx<{ hiddenAt: Date | null }[]>`SELECT hidden_at FROM story_revisions WHERE id = ${story.currentRevisionId}`;
       if (current?.hiddenAt) throw conflict('Its current version was removed. Restore another version before bringing it back.');
+      const next: StoryStatus = story.publishedAt ? 'active' : 'unreviewed';
+      await tx`UPDATE stories SET status = ${next}, updated_at = now() WHERE id = ${storyId}`;
+      await logModAction(tx, user.id, 'unhide', 'story', storyId, reason, { to: next });
+      return { status: next, approvedCreator: null };
     }
-    const approving = story.status === 'unreviewed' && status === 'active';
-    if (approving) {
-      if (!story.currentRevisionId) {
-        throw conflict('Its first version is still waiting for review. Accept that version to publish the story.');
-      }
-      if (story.createdBy === user.id) throw forbidden('You cannot approve your own story.');
-      if (revisionId && revisionId !== story.currentRevisionId) {
-        throw conflict('The author changed this story after you opened it. Take another look before approving.', 'stale');
-      }
+
+    // Approving a story waiting for review.
+    if (!story.currentRevisionId) {
+      const [first] = await tx<{ status: RevisionStatus }[]>`
+        SELECT status FROM story_revisions WHERE story_id = ${storyId} ORDER BY created_at LIMIT 1`;
+      throw conflict(
+        first?.status === 'rejected'
+          ? 'Its first version was turned down, so there is nothing to publish.'
+          : 'Its first version is still waiting for review. Accept that version to publish the story.',
+      );
     }
-    await tx`UPDATE stories SET status = ${status}, updated_at = now() WHERE id = ${storyId}`;
-    const action = status === 'hidden' ? 'hide' : story.status === 'hidden' ? 'unhide' : 'approve';
-    await logModAction(tx, user.id, action, 'story', storyId, reason);
-    return approving ? story.createdBy : null;
+    if (story.createdBy === user.id) throw forbidden('You cannot approve your own story.');
+    if (revisionId && revisionId !== story.currentRevisionId) {
+      throw conflict('The author changed this story after you opened it. Take another look before approving.', 'stale');
+    }
+    await tx`UPDATE stories SET status = 'active', updated_at = now() WHERE id = ${storyId}`;
+    await markPublished(tx, storyId, story.currentRevisionId);
+    await logModAction(tx, user.id, 'approve', 'story', storyId, reason);
+    return { status: 'active' as StoryStatus, approvedCreator: story.createdBy };
   });
   invalidateCellCounts();
   // Contributions only count toward promotion once the story is published.
-  if (approvedCreator) await refreshTrust(sql, approvedCreator);
+  if (result.approvedCreator) await refreshTrust(sql, result.approvedCreator);
+  return result.status;
 }
 
 /**
@@ -615,17 +694,23 @@ export async function closeReportsAbout(tx: Db, actorId: string, targetType: 'st
   return rows.length;
 }
 
-export async function setProtection(sql: Sql, user: SessionUser, storyId: string, level: TrustLevel) {
+export async function setProtection(sql: Sql, user: SessionUser, storyId: string, level: TrustLevel, reason: string | null = null) {
   if (user.trustLevel < TRUST.MODERATOR) throw forbidden();
   await sql.begin(async (tx) => {
-    const [row] = await tx`UPDATE stories SET protection_level = ${level} WHERE id = ${storyId} RETURNING id`;
-    if (!row) throw notFound('Story');
-    await logModAction(tx, user.id, `protect:${level}`, 'story', storyId);
+    const story = await fetchStory(tx, storyId, true);
+    if (!story) throw notFound('Story');
+    if (story.protectionLevel === level) return;
+    await tx`UPDATE stories SET protection_level = ${level} WHERE id = ${storyId}`;
+    await logModAction(tx, user.id, `protect:${level}`, 'story', storyId, reason, { from: story.protectionLevel });
   });
 }
 
 export async function pendingForReview({ sql, storage }: StoryDeps) {
-  const pending = await fetchRevisions(sql, sql`r.status = 'pending' AND r.hidden_at IS NULL ORDER BY r.created_at LIMIT 50`);
+  // Held edits to hidden stories and from banned people wait outside the queue (accepting them would
+  // rewrite a hidden story or publish a banned person's work); they come back if that changes.
+  const pending = await fetchRevisions(sql, sql`r.status = 'pending' AND r.hidden_at IS NULL
+    AND u.banned_at IS NULL AND (SELECT s.status FROM stories s WHERE s.id = r.story_id) <> 'hidden'
+    ORDER BY r.created_at LIMIT 50`);
   const parentIds = pending.map((r) => r.parentRevisionId).filter((id): id is string => !!id);
   const parents = parentIds.length ? await fetchRevisions(sql, sql`r.id IN ${sql(parentIds)}`) : [];
   const byId = new Map(parents.map((p) => [p.id, p]));
@@ -665,7 +750,7 @@ export async function unreviewedStories({ sql, storage }: StoryDeps): Promise<Un
     FROM stories s
     JOIN story_revisions r ON r.id = s.current_revision_id
     JOIN users u ON u.id = s.created_by
-    WHERE s.status = 'unreviewed'
+    WHERE s.status = 'unreviewed' AND u.banned_at IS NULL
     ORDER BY s.created_at
     LIMIT 50`;
   return rows.map((r) => ({
@@ -680,23 +765,35 @@ export async function unreviewedStories({ sql, storage }: StoryDeps): Promise<Un
 // ---------------------------------------------------------------------------------------------
 // Contributions (the user themself and reviewers only; access is checked by the caller)
 
-/** Stories a user started, newest first, including ones that are not public. */
-export async function storiesStartedBy({ sql, storage }: StoryDeps, userId: string, offset: number, limit = 30): Promise<Page<ContributionStory>> {
-  const rows = await sql<(SummaryRow & { createdAt: Date; hasCurrent: boolean; revisionStatus: RevisionStatus })[]>`
+/**
+ * Stories a user started, newest first, including ones that are not public. For a hidden story,
+ * non-reviewers see the person's own first version, not whatever the story currently says.
+ */
+export async function storiesStartedBy(
+  { sql, storage }: StoryDeps,
+  userId: string,
+  offset: number,
+  viewerIsReviewer: boolean,
+  limit = 30,
+): Promise<Page<ContributionStory>> {
+  const rows = await sql<(SummaryRow & { createdAt: Date; hasCurrent: boolean; revisionStatus: RevisionStatus; published: boolean })[]>`
     SELECT s.id AS story_id, s.status AS story_status, s.cell_count, s.created_at, s.current_revision_id IS NOT NULL AS has_current,
+           s.published_at IS NOT NULL AS published,
            r.status AS revision_status, r.title, r.image_key, r.source_count,
            r.start_year, r.start_month, r.start_day, r.end_year, r.end_month, r.end_day, r.is_ongoing, r.is_approx
     FROM stories s
-    JOIN story_revisions r ON r.id = COALESCE(s.current_revision_id,
-      (SELECT f.id FROM story_revisions f WHERE f.story_id = s.id ORDER BY f.created_at LIMIT 1))
+    JOIN story_revisions r ON r.id = CASE
+      WHEN s.current_revision_id IS NOT NULL AND (s.status <> 'hidden' OR ${viewerIsReviewer}) THEN s.current_revision_id
+      ELSE (SELECT f.id FROM story_revisions f WHERE f.story_id = s.id ORDER BY f.created_at LIMIT 1) END
     WHERE s.created_by = ${userId}
     ORDER BY s.created_at DESC, s.id DESC
     LIMIT ${limit + 1} OFFSET ${offset}`;
   const items = rows.slice(0, limit).map((r) => ({
     story: toSummary(storage, r),
     state:
-      r.storyStatus === 'hidden' ? ('hidden' as const)
-      : !r.hasCurrent && r.revisionStatus === 'rejected' ? ('rejected' as const)
+      // Rejected in review before it was ever public reads as "not accepted", not "hidden".
+      (r.storyStatus === 'hidden' && !r.published) || (!r.hasCurrent && r.revisionStatus === 'rejected') ? ('rejected' as const)
+      : r.storyStatus === 'hidden' ? ('hidden' as const)
       : r.storyStatus === 'active' && r.hasCurrent ? ('live' as const)
       : ('waiting' as const),
     createdAt: r.createdAt.toISOString(),
@@ -704,18 +801,20 @@ export async function storiesStartedBy({ sql, storage }: StoryDeps, userId: stri
   return { items, nextOffset: rows.length > limit ? offset + limit : null };
 }
 
-/** Every version a user wrote, newest first. */
-export async function revisionsBy(sql: Sql, userId: string, offset: number, limit = 50): Promise<Page<ContributionEdit>> {
+/** Every version a user wrote (not copies they made by restoring), newest first. */
+export async function revisionsBy(sql: Sql, userId: string, offset: number, viewerIsReviewer: boolean, limit = 50): Promise<Page<ContributionEdit>> {
   const rows = await sql<
     { id: string; storyId: string; storyTitle: string; storyStatus: StoryStatus; isFirst: boolean; status: RevisionStatus; isCurrent: boolean;
       hiddenAt: Date | null; editSummary: string | null; flags: string[]; createdAt: Date }[]
   >`
-    SELECT r.id, r.story_id, COALESCE(cur.title, r.title) AS story_title, s.status AS story_status, r.parent_revision_id IS NULL AS is_first,
+    SELECT r.id, r.story_id,
+           CASE WHEN s.status = 'hidden' AND NOT ${viewerIsReviewer} THEN r.title ELSE COALESCE(cur.title, r.title) END AS story_title,
+           s.status AS story_status, r.parent_revision_id IS NULL AS is_first,
            r.status, COALESCE(s.current_revision_id = r.id, false) AS is_current, r.hidden_at, r.edit_summary, r.flags, r.created_at
     FROM story_revisions r
     JOIN stories s ON s.id = r.story_id
     LEFT JOIN story_revisions cur ON cur.id = s.current_revision_id
-    WHERE r.author_id = ${userId}
+    WHERE r.author_id = ${userId} AND r.origin IN ('create', 'edit')
     ORDER BY r.created_at DESC, r.id DESC
     LIMIT ${limit + 1} OFFSET ${offset}`;
   const items = rows.slice(0, limit).map(({ hiddenAt, createdAt, ...r }) => ({

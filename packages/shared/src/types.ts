@@ -172,10 +172,12 @@ export interface TrustProgress {
 export interface UserStats {
   storiesStarted: number;
   storiesLive: number;
+  /** Versions written (first versions and edits; not restore copies). */
   edits: number;
-  editsLive: number;
+  editsAccepted: number;
   editsWaiting: number;
   editsRejected: number;
+  editsRemoved: number;
   messages: number;
 }
 

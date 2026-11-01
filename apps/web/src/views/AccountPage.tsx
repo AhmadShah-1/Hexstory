@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router';
 import { RULES, TRUST, TRUST_NAMES, displayNameSchema, type Me, type TrustLevel, type UserProfile } from '@hexstory/shared';
 import { errorMessage } from '../api/client';
-import { useDeleteAccount, useSession, useSignOut, useUpdateProfile, useUserProfile } from '../api/queries';
+import { keys, useDeleteAccount, useSession, useSignOut, useUpdateProfile, useUserProfile } from '../api/queries';
 import { EditsList, StatsGrid, StoriesList } from '../components/Contributions';
 import { Panel } from '../components/Panel';
 import { SignInPrompt } from '../components/SignInPrompt';
@@ -21,6 +22,13 @@ export function AccountPage() {
   const session = useSession();
   const user = session.data?.user;
   const profile = useUserProfile(user?.id);
+  const qc = useQueryClient();
+  // Loading your page re-checks promotion, so the profile can be ahead of the session: trust it, and
+  // refresh the session so the top bar (Watchtower button) follows.
+  const profileLevel = profile.data?.trustLevel;
+  useEffect(() => {
+    if (user && profileLevel !== undefined && profileLevel !== user.trustLevel) qc.invalidateQueries({ queryKey: keys.session });
+  }, [user, profileLevel, qc]);
   const [params, setParams] = useSearchParams();
   const tab = TABS.find((t) => t.id === params.get('tab'))?.id ?? 'overview';
 
@@ -33,8 +41,9 @@ export function AccountPage() {
     );
   }
 
+  const level = (profileLevel ?? user.trustLevel) as TrustLevel;
   return (
-    <Panel title="Your account" subtitle={`${TRUST_NAMES[user.trustLevel]} · joined ${shortDate(user.createdAt)}`}>
+    <Panel title="Your account" subtitle={`${TRUST_NAMES[level]} · joined ${shortDate(user.createdAt)}`}>
       <div className="tabs" role="tablist">
         {TABS.map((t) => (
           <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => setParams(t.id === 'overview' ? {} : { tab: t.id }, { replace: true })}>
@@ -45,7 +54,7 @@ export function AccountPage() {
       {tab === 'stories' && <StoriesList userId={user.id} />}
       {tab === 'edits' && (
         <>
-          <p className="muted small pad-x">{WHY_WAITING[user.trustLevel]}</p>
+          <p className="muted small pad-x">{WHY_WAITING[level]}</p>
           <EditsList userId={user.id} />
         </>
       )}
@@ -55,12 +64,12 @@ export function AccountPage() {
             <div className="avatar avatar-lg" aria-hidden="true">{initials(user.displayName)}</div>
             <div>
               <div className="profile-name">{user.displayName}</div>
-              <div className="muted small">{TRUST_NAMES[user.trustLevel]} · joined {shortDate(user.createdAt)}</div>
+              <div className="muted small">{TRUST_NAMES[level]} · joined {shortDate(user.createdAt)}</div>
             </div>
           </div>
           {profile.isLoading && <p className="muted">Loading…</p>}
           {profile.error && <p className="error-text">{errorMessage(profile.error)}</p>}
-          {profile.data?.details && <Overview level={user.trustLevel} details={profile.data.details} />}
+          {profile.data?.details && <Overview level={level} details={profile.data.details} />}
           <Settings user={user} />
         </div>
       )}
@@ -70,7 +79,7 @@ export function AccountPage() {
 
 /** One line for the Edits tab: why one of your edits might be waiting, at your level. */
 const WHY_WAITING: Record<TrustLevel, string> = {
-  0: `As a newcomer, your edits wait for a reviewer. The exception is your own new story: while it waits for approval, your changes to it are saved straight away (unless they add more than ${RULES.newcomerMaxLinks} links).`,
+  0: `As a newcomer, your edits wait for a reviewer. The exception is your own new story: while it waits for approval, your changes to it are saved straight away, unless the story would then have more than ${RULES.newcomerMaxLinks} links or the change removes more than ${RULES.largeRemovalPercent}% of the text.`,
   1: `Your edits go live straight away, unless they remove more than ${RULES.largeRemovalPercent}% of a story or a moderator has protected the story. Those wait for a reviewer.`,
   2: 'Your edits go live straight away, unless a moderator has protected the story.',
   3: 'Your edits go live straight away.',

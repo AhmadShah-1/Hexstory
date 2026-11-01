@@ -34,6 +34,7 @@ export const userRoutes =
   (deps: Deps): FastifyPluginAsync =>
   async (app) => {
     const { sql, square } = deps;
+    const admins = deps.config.ADMIN_EMAILS;
 
     // ---- User pages: public basics; contributions for the user themself and reviewers ----
 
@@ -50,14 +51,14 @@ export const userRoutes =
       const viewer = requireUser(req);
       const { id } = parse(idParams, req.params);
       assertCanSeeContributions(viewer, id);
-      return storiesStartedBy(deps, id, parse(offsetQuery, req.query).offset);
+      return storiesStartedBy(deps, id, parse(offsetQuery, req.query).offset, canReview(viewer.trustLevel));
     });
 
     app.get('/api/users/:id/revisions', async (req) => {
       const viewer = requireUser(req);
       const { id } = parse(idParams, req.params);
       assertCanSeeContributions(viewer, id);
-      return revisionsBy(sql, id, parse(offsetQuery, req.query).offset);
+      return revisionsBy(sql, id, parse(offsetQuery, req.query).offset, canReview(viewer.trustLevel));
     });
 
     // ---- Reviewers ask for bans; moderators decide ----
@@ -66,7 +67,7 @@ export const userRoutes =
       const user = requireWriter(req);
       const { id } = parse(idParams, req.params);
       const body = parse(z.object({ reason: z.string().trim().min(5, 'Tell moderators why (at least a few words).').max(500) }), req.body);
-      await requestBan(sql, user, id, body.reason);
+      await requestBan(sql, user, id, body.reason, admins);
       return reply.code(201).send({ ok: true });
     });
 
@@ -82,7 +83,7 @@ export const userRoutes =
       const user = requireWriter(req);
       const { id } = parse(idParams, req.params);
       const body = parse(z.object({ banned: z.boolean(), reason, removeContent: z.boolean().default(false) }), req.body);
-      const { cleanup, liveHide } = await setBanned(sql, user, id, { banned: body.banned, reason: body.reason ?? null, removeContent: body.removeContent });
+      const { cleanup, liveHide } = await setBanned(sql, user, id, { banned: body.banned, reason: body.reason ?? null, removeContent: body.removeContent }, admins);
       await hideLive(square, req.log, liveHide);
       return { ok: true, cleanup };
     });
@@ -91,7 +92,7 @@ export const userRoutes =
       const user = requireWriter(req);
       const { id } = parse(idParams, req.params);
       const body = parse(z.object({ reason, removeContent: z.boolean() }), req.body);
-      const { cleanup, liveHide } = await deleteUser(sql, user, id, { reason: body.reason ?? null, removeContent: body.removeContent });
+      const { cleanup, liveHide } = await deleteUser(sql, user, id, { reason: body.reason ?? null, removeContent: body.removeContent }, admins);
       await hideLive(square, req.log, liveHide);
       return { ok: true, cleanup };
     });
@@ -103,7 +104,7 @@ export const userRoutes =
         z.object({ level: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal('auto')]), reason }),
         req.body,
       );
-      await setTrustLevel(sql, user, id, body.level, body.reason ?? null);
+      await setTrustLevel(sql, user, id, body.level, body.reason ?? null, admins);
       return { ok: true };
     });
 

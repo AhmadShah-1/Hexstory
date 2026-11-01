@@ -3,6 +3,7 @@ import remarkGfm from 'remark-gfm';
 import { Link, useNavigate } from 'react-router';
 import { LIMITS } from '@hexstory/shared';
 import { useRules } from '../api/queries';
+import { closePage } from '../lib/navigation';
 import { Modal } from '../components/Modal';
 import terms from '../../../../legal/terms-of-service.md?raw';
 import privacy from '../../../../legal/privacy-policy.md?raw';
@@ -32,7 +33,7 @@ export function PageView({ page }: { page: PageName }) {
   const text = fillRules(PAGES[page], { ...rules, limits: { ...LIMITS, contentKilobytesMax: LIMITS.contentBytesMax / 1024, imageMegabytesMax: LIMITS.imageBytesMax / 1024 / 1024 } });
   const [, title, body] = text.match(/^# (.+)\n([\s\S]*)$/) ?? [null, page, text];
   return (
-    <Modal open onClose={() => navigate('/')} title={title ?? ''}>
+    <Modal open onClose={() => closePage(navigate)} title={title ?? ''}>
       <div className="prose">
         <Markdown
           remarkPlugins={[remarkGfm]}

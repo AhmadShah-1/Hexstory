@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Server as HttpServer } from 'node:http';
+import type { Server as HttpServer, IncomingMessage } from 'node:http';
 import { Server, type Socket } from 'socket.io';
 import { chatMessageSchema, isDisplayCell, type ClientToServerEvents, type ServerToClientEvents } from '@hexstory/shared';
 import { SESSION_COOKIE, getSessionUser } from '../auth/sessions.js';
@@ -29,17 +29,31 @@ export interface SquareDeps {
   log: { error(obj: unknown, msg?: string): void };
   /** How often this instance refreshes its sockets' presence; tests shorten it. */
   heartbeatMs?: number;
+  /** Behind a proxy (Vercel), the client's address is the first `X-Forwarded-For` entry. */
+  trustProxy?: boolean;
 }
 
 const room = (cell: string) => `cell:${cell}`;
 const UNAVAILABLE = 'The Square is having trouble right now. Please try again in a moment.';
 
+/** Never throws: a malformed cookie (bad %-escapes) is simply no session. */
 function readCookie(header: string | undefined, name: string): string | undefined {
   for (const part of header?.split(';') ?? []) {
     const [key, ...value] = part.trim().split('=');
-    if (key === name) return decodeURIComponent(value.join('='));
+    if (key !== name) continue;
+    try {
+      return decodeURIComponent(value.join('='));
+    } catch {
+      return undefined;
+    }
   }
   return undefined;
+}
+
+function clientIp(req: IncomingMessage, trustProxy: boolean): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim();
+  return (trustProxy && first) || req.socket.remoteAddress || 'unknown';
 }
 
 /**
@@ -67,7 +81,32 @@ export async function attachSquare(server: HttpServer, deps: SquareDeps): Promis
     maxHttpBufferSize: 4_096,
     // Reject cross-site connections so the session cookie can't be used from another origin.
     // Browsers always send Origin on WebSocket upgrades; non-browser clients may omit it.
-    allowRequest: (req, callback) => callback(null, !req.headers.origin || req.headers.origin === deps.appOrigin),
+    allowRequest: (req, callback) => {
+      if (req.headers.origin && req.headers.origin !== deps.appOrigin) return callback(null, false);
+      // WebSocket upgrades never pass Fastify's rate limit, so connections are limited here: per
+      // address on this instance (open connections) and across instances (new connections a minute).
+      const ip = clientIp(req, !!deps.trustProxy);
+      if ((openByIp.get(ip) ?? 0) >= POLICY.socketConnectionsPerIp) return callback(null, false);
+      coordinator
+        .hit(`ws-handshakes:${ip}`, 60_000)
+        .then((count) => callback(null, count <= POLICY.socketHandshakesPerMinute))
+        // If the shared counter is unreachable, the per-instance limit still applies.
+        .catch(() => callback(null, true));
+    },
+  });
+  // Counted when the transport opens (synchronously, so simultaneous connections can't slip past) and
+  // released when it closes, whatever happens in between.
+  const openByIp = new Map<string, number>();
+  io.engine.on('connection', (raw: { request: IncomingMessage; once(event: 'close', fn: () => void): void; close(): void }) => {
+    const ip = clientIp(raw.request, !!deps.trustProxy);
+    const open = (openByIp.get(ip) ?? 0) + 1;
+    openByIp.set(ip, open);
+    raw.once('close', () => {
+      const left = (openByIp.get(ip) ?? 1) - 1;
+      if (left > 0) openByIp.set(ip, left);
+      else openByIp.delete(ip);
+    });
+    if (open > POLICY.socketConnectionsPerIp) raw.close();
   });
 
   const member = (socket: SquareSocket) => `${instanceId}:${socket.id}`;
@@ -86,8 +125,19 @@ export async function attachSquare(server: HttpServer, deps: SquareDeps): Promis
   };
 
   io.on('connection', (socket) => {
+    // Socket.IO runs this outside any error handling, so a throw here would take the process down.
+    try {
+      setUpSocket(socket);
+    } catch (err) {
+      log.error({ err }, 'square: connection setup failed');
+      socket.disconnect(true);
+    }
+  });
+
+  function setUpSocket(socket: SquareSocket) {
     socket.data.token = readCookie(socket.handshake.headers.cookie, SESSION_COOKIE);
     socket.data.cell = null;
+    let lastSendAt = 0;
 
     // Per-connection flood control: too many events in a window drops the connection.
     let windowStart = Date.now();
@@ -126,6 +176,9 @@ export async function attachSquare(server: HttpServer, deps: SquareDeps): Promis
 
     socket.on('send', async (data, ack) => {
       if (typeof ack !== 'function') return;
+      // Checked before any database work, so a flood of sends costs nothing.
+      if (Date.now() - lastSendAt < POLICY.chatIntervalMs) return ack({ ok: false, error: 'Slow down a little.' });
+      lastSendAt = Date.now();
       try {
         const parsed = chatMessageSchema.safeParse(data);
         if (!parsed.success) return ack({ ok: false, error: 'Messages must be 1–500 characters.' });
@@ -165,7 +218,7 @@ export async function attachSquare(server: HttpServer, deps: SquareDeps): Promis
       const cell = socket.data.cell;
       if (cell) safely('presence disconnect', coordinator.removePresence(cell, member(socket)).then(() => announcePresence(cell)));
     });
-  });
+  }
 
   /**
    * Keeps this instance's presence entries alive and corrects counts its rooms see (entries of a

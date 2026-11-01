@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 
 /** Thin wrapper over <dialog>: focus trapping, Escape and the backdrop come from the browser. */
 export function Modal({ open, onClose, title, children, dismissible = true }: {
@@ -9,6 +9,7 @@ export function Modal({ open, onClose, title, children, dismissible = true }: {
   dismissible?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
 
   useEffect(() => {
     const dialog = ref.current;
@@ -21,6 +22,7 @@ export function Modal({ open, onClose, title, children, dismissible = true }: {
     <dialog
       ref={ref}
       className="modal"
+      aria-labelledby={titleId}
       onCancel={(e) => {
         e.preventDefault();
         if (dismissible) onClose();
@@ -31,7 +33,7 @@ export function Modal({ open, onClose, title, children, dismissible = true }: {
     >
       <div className="modal-body">
         <div className="modal-head">
-          <h2>{title}</h2>
+          <h2 id={titleId}>{title}</h2>
           {dismissible && (
             <button className="icon-button" onClick={onClose} aria-label="Close">
               ×

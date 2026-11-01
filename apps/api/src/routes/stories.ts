@@ -70,23 +70,23 @@ export const storyRoutes =
     app.post('/api/stories/:id/restore', async (req) => {
       const user = requireWriter(req);
       const { id } = parse(idParams, req.params);
-      const { revisionId } = parse(z.object({ revisionId: z.uuid() }), req.body);
-      return restoreRevision(deps, user, id, revisionId);
+      const { revisionId, baseRevisionId } = parse(z.object({ revisionId: z.uuid(), baseRevisionId: z.uuid().nullish() }), req.body);
+      return restoreRevision(deps, user, id, revisionId, baseRevisionId);
     });
 
     app.post('/api/stories/:id/status', async (req) => {
       const user = requireWriter(req);
       const { id } = parse(idParams, req.params);
       const body = parse(z.object({ status: z.enum(['active', 'hidden']), reason, revisionId: z.uuid().nullish() }), req.body);
-      await setStoryStatus(sql, user, id, body.status, body.reason ?? null, body.revisionId);
-      return { ok: true };
+      const status = await setStoryStatus(sql, user, id, body.status, body.reason ?? null, body.revisionId);
+      return { ok: true, status };
     });
 
     app.post('/api/stories/:id/protection', async (req) => {
       const user = requireWriter(req);
       const { id } = parse(idParams, req.params);
-      const { level } = parse(z.object({ level: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]) }), req.body);
-      await setProtection(sql, user, id, level);
+      const { level, reason: why } = parse(z.object({ level: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]), reason }), req.body);
+      await setProtection(sql, user, id, level, why ?? null);
       return { ok: true };
     });
   };

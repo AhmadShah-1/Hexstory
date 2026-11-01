@@ -91,7 +91,8 @@ export const useRevision = (id: string | null | undefined) =>
     queryKey: keys.revision(id ?? ''),
     queryFn: () => api<StoryRevision>(`/api/revisions/${id}`),
     enabled: !!id,
-    staleTime: Infinity, // revisions never change
+    // A version's content never changes, but its status (reviewed, removed) does; writes invalidate it.
+    staleTime: 60_000,
   });
 
 export const useMessages = (cell: string) =>
@@ -111,6 +112,9 @@ function useInvalidateStories() {
     qc.invalidateQueries({ queryKey: ['user-revisions'] });
     qc.invalidateQueries({ queryKey: ['user'] });
     qc.invalidateQueries({ queryKey: ['audit-log'] });
+    qc.invalidateQueries({ queryKey: ['revision'] });
+    // Approvals and accepted edits can promote someone; the top bar and account page follow the session.
+    qc.invalidateQueries({ queryKey: keys.session });
     if (storyId) {
       qc.invalidateQueries({ queryKey: keys.story(storyId) });
       qc.invalidateQueries({ queryKey: keys.revisions(storyId) });
@@ -146,7 +150,9 @@ export function useReviewRevision(storyId: string) {
 export function useRestoreRevision(storyId: string) {
   const invalidate = useInvalidateStories();
   return useMutation({
-    mutationFn: (revisionId: string) => api<WriteResult>(`/api/stories/${storyId}/restore`, { method: 'POST', body: { revisionId } }),
+    /** `baseRevisionId`: the version current when the reviewer chose to restore (guards against double clicks). */
+    mutationFn: ({ revisionId, baseRevisionId }: { revisionId: string; baseRevisionId?: string }) =>
+      api<WriteResult>(`/api/stories/${storyId}/restore`, { method: 'POST', body: { revisionId, baseRevisionId } }),
     onSuccess: () => invalidate(storyId),
   });
 }
@@ -159,7 +165,7 @@ export function useSetStoryStatus(storyId: string) {
   const invalidate = useInvalidateStories();
   return useMutation({
     mutationFn: (input: { status: 'active' | 'hidden'; revisionId?: string; reason?: string }) =>
-      api(`/api/stories/${storyId}/status`, { method: 'POST', body: input }),
+      api<{ ok: true; status: 'active' | 'hidden' | 'unreviewed' }>(`/api/stories/${storyId}/status`, { method: 'POST', body: input }),
     onSuccess: () => invalidate(storyId),
   });
 }
@@ -186,10 +192,15 @@ export function useSetProtection(storyId: string) {
   });
 }
 
+/** Report counts appear on people's pages, the Users list and the Watchtower. */
+const REPORT_KEYS = [keys.watchtower, ['user'], ['mod-users'], ['audit-log']] as const;
+
 export function useReport() {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: { targetType: ReportTarget; targetId: string; reason: ReportReason; details?: string }) =>
       api('/api/reports', { method: 'POST', body: input }),
+    onSuccess: () => REPORT_KEYS.forEach((queryKey) => qc.invalidateQueries({ queryKey })),
   });
 }
 
@@ -198,7 +209,7 @@ export function useResolveReport() {
   return useMutation({
     mutationFn: ({ id, resolution }: { id: string; resolution: 'dismissed' | 'actioned' }) =>
       api(`/api/reports/${id}/resolve`, { method: 'POST', body: { resolution } }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: keys.watchtower }),
+    onSuccess: () => REPORT_KEYS.forEach((queryKey) => qc.invalidateQueries({ queryKey })),
   });
 }
 
@@ -206,7 +217,10 @@ export function useHideMessage() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api(`/api/messages/${id}/hide`, { method: 'POST', body: {} }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: keys.watchtower }),
+    onSuccess: () => {
+      REPORT_KEYS.forEach((queryKey) => qc.invalidateQueries({ queryKey }));
+      qc.invalidateQueries({ queryKey: ['messages'] });
+    },
   });
 }
 
@@ -265,7 +279,7 @@ function useInvalidateModeration() {
   const qc = useQueryClient();
   const invalidateStories = useInvalidateStories();
   return () => {
-    for (const key of ['user', 'mod-users', 'ban-requests', 'audit-log', 'messages']) qc.invalidateQueries({ queryKey: [key] });
+    for (const key of ['user', 'mod-users', 'ban-requests', 'audit-log', 'messages', 'revision', 'revisions']) qc.invalidateQueries({ queryKey: [key] });
     qc.invalidateQueries({ queryKey: ['story'] });
     invalidateStories();
   };
@@ -321,7 +335,7 @@ export function useSetTrust(userId: string) {
 
 /** The rules in force. Starts from the defaults compiled in, so pages never wait on it. */
 export const useRules = () =>
-  useQuery({ queryKey: ['rules'], queryFn: () => api<Rules>('/api/rules'), staleTime: 5 * 60_000, placeholderData: RULES as Rules });
+  useQuery({ queryKey: ['rules'], queryFn: () => api<Rules>('/api/rules'), staleTime: 60_000, placeholderData: RULES as Rules });
 
 type ModSettings = { rules: EditableRules; updated: { at: string; by: { id: string; displayName: string } } | null };
 

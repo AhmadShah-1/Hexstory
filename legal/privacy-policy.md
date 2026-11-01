@@ -1,6 +1,6 @@
 # Privacy Policy
 
-_Last updated: [DATE]_
+_Last updated: 1 November 2026_
 
 This policy explains what Hexstory collects and how it is used.
 
@@ -56,7 +56,7 @@ Your email address is never shown publicly.
 
 Depending on where you live (for example under GDPR or CCPA) you can request access to, correction
 of, export of, or deletion of your personal data, and object to processing. Contact
-[CONTACT EMAIL]. You can delete your account at any time from your account settings.
+hexstory.world@gmail.com. You can delete your account at any time from your account settings.
 
 ## Children
 
@@ -69,4 +69,4 @@ We will post updates here and notify users of material changes on the Service.
 
 ## Contact
 
-[CONTACT EMAIL]
+hexstory.world@gmail.com

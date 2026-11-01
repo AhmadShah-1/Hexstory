@@ -28,6 +28,28 @@ export async function reserveUpload(sql: Sql, user: SessionUser, id: string, dec
   });
 }
 
+/**
+ * Claims an upload slot for processing, once: it must be this user's, and not completed or being
+ * completed already. Without this, a slot could be completed twice (re-uploading different bytes to a
+ * still-valid URL would replace a published image) or a made-up id could overwrite someone's image.
+ */
+export async function claimUpload(sql: Db, userId: string, id: string): Promise<boolean> {
+  const rows = await sql`
+    UPDATE uploads SET completed_at = now() WHERE id = ${id} AND user_id = ${userId} AND completed_at IS NULL RETURNING id`;
+  return rows.length > 0;
+}
+
+/** Gives a claimed slot back after a failure the browser may retry (e.g. storage was unavailable). */
+export async function releaseUpload(sql: Db, userId: string, id: string): Promise<void> {
+  await sql`UPDATE uploads SET completed_at = NULL WHERE id = ${id} AND user_id = ${userId} AND stored_bytes IS NULL`;
+}
+
+/** Whether this user holds an open (not yet completed) slot with this id. */
+export async function hasOpenUpload(sql: Db, userId: string, id: string): Promise<boolean> {
+  const [row] = await sql`SELECT 1 FROM uploads WHERE id = ${id} AND user_id = ${userId} AND completed_at IS NULL`;
+  return !!row;
+}
+
 /** Notes what a completed upload stored (WebP full size + thumbnail). */
 export async function recordStoredUpload(sql: Db, userId: string, id: string, storedBytes: number): Promise<void> {
   await sql`UPDATE uploads SET stored_bytes = ${storedBytes}, completed_at = now() WHERE id = ${id} AND user_id = ${userId}`;

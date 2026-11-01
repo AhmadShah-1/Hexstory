@@ -474,3 +474,13 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--f
 .usage-missing p { flex-basis: 100%; }
 .usage-checked { margin-top: 8px; }
 .usage-legend { margin-top: 4px; }
+
+/* ---- Review fixes ---- */
+/* Long unbroken words (URLs, names) must not push panels wider than the screen. */
+.panel-title, .story-title, .story-row-title, .card-head strong, .contrib-title { overflow-wrap: anywhere; }
+.title-diff { margin: 4px 0 6px; }
+.title-diff .diff { display: inline; }
+@media (max-width: 720px) {
+  /* Subtitles carry status ("Waiting for a reviewer…"): wrap rather than cut it off on phones. */
+  .panel-subtitle { white-space: normal; }
+}

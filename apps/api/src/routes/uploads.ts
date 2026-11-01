@@ -6,7 +6,7 @@ import { LIMITS, uploadIntentSchema, type UploadTicket, type UploadedImage } fro
 import { HttpError, badRequest, notFound } from '../errors.js';
 import { parse, requireWriter } from '../http.js';
 import { POLICY } from '../policy.js';
-import { recordStoredUpload, reserveUpload } from '../services/uploads.js';
+import { claimUpload, hasOpenUpload, recordStoredUpload, releaseUpload, reserveUpload } from '../services/uploads.js';
 import { imageFileNames, stagedKey } from '../storage/index.js';
 import type { Deps } from './deps.js';
 
@@ -51,6 +51,8 @@ export const uploadRoutes =
         const user = requireWriter(req);
         const { id } = parse(idParams, req.params);
         if (!Buffer.isBuffer(req.body)) throw badRequest('Send the image as application/octet-stream.');
+        // Only into a slot this user reserved and hasn't completed, like a pre-signed URL.
+        if (!(await hasOpenUpload(sql, user.id, id))) throw notFound('That upload');
         await storage.writeStaged!(stagedKey(user.id, id), req.body);
         return reply.code(200).send();
       });
@@ -61,8 +63,16 @@ export const uploadRoutes =
       const { id } = parse(idParams, req.params);
       // The key is built from the session, so nobody can complete someone else's upload.
       const key = stagedKey(user.id, id);
-      const original = await storage.readStaged(key, LIMITS.imageBytesMax);
-      if (original === 'missing') throw notFound('That upload');
+      if (!(await claimUpload(sql, user.id, id))) throw notFound('That upload');
+      const original = await storage.readStaged(key, LIMITS.imageBytesMax).catch(async (err) => {
+        await releaseUpload(sql, user.id, id);
+        throw err;
+      });
+      if (original === 'missing') {
+        // Not uploaded yet (or already gone): the slot stays usable until the browser sends it.
+        await releaseUpload(sql, user.id, id);
+        throw notFound('That upload');
+      }
       const discardOriginal = () => storage.deleteStaged(key).catch((err) => req.log.warn({ err }, 'could not delete staged upload'));
       if (original === 'too-large') {
         await discardOriginal();
@@ -87,6 +97,7 @@ export const uploadRoutes =
         // so the browser can retry this step.
         req.log.error({ err }, 'publishing image failed');
         await Promise.allSettled([storage.delete(names.full), storage.delete(names.thumb)]);
+        await releaseUpload(sql, user.id, id);
         throw new HttpError(502, 'storage', 'The image could not be saved. Please try again.');
       }
       await discardOriginal();

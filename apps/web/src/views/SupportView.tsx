@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router';
 import { supportUrlOrNull } from '@hexstory/shared';
 import { useSupportLinks } from '../api/queries';
+import { closePage } from '../lib/navigation';
 import { Modal } from '../components/Modal';
 
 /**
@@ -16,7 +17,7 @@ export function SupportView() {
   const paypal = supportUrlOrNull('paypal', data?.paypal);
 
   return (
-    <Modal open onClose={() => navigate('/')} title="Support Hexstory">
+    <Modal open onClose={() => closePage(navigate)} title="Support Hexstory">
       <div className="prose support">
         <p>
           Hexstory is free to use. Voluntary contributions help cover hosting, storage, and continued development.

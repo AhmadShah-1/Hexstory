@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { TRUST, type PendingRevision, type Report, type UnreviewedStory } from '@hexstory/shared';
 import { ApiError, errorMessage } from '../api/client';
@@ -13,7 +12,9 @@ import {
   useSetStoryStatus,
   useWatchtower,
 } from '../api/queries';
+import { ConfirmAction } from '../components/ConfirmAction';
 import { Panel } from '../components/Panel';
+import { useToast } from '../components/Toast';
 import { WordDiff } from '../components/WordDiff';
 import { timeAgo } from '../lib/format';
 
@@ -25,7 +26,12 @@ export function Watchtower() {
   const trust = session.data?.user?.trustLevel ?? 0;
   const isReviewer = trust >= TRUST.REVIEWER;
   const data = useWatchtower(isReviewer);
-  const [tab, setTab] = useState<Tab>('pending');
+  // The tab lives in the URL, so Back returns to it after opening a story or version.
+  const [params, setParams] = useSearchParams();
+  const tabParam = params.get('tab');
+  const tab: Tab = tabParam === 'new' || tabParam === 'reports' ? tabParam : 'pending';
+  const setTab = (t: Tab) => setParams(t === 'pending' ? {} : { tab: t }, { replace: true });
+  const viewerId = session.data?.user?.id;
 
   if (!isReviewer) {
     return (
@@ -58,13 +64,13 @@ export function Watchtower() {
               Edits wait here when the writer is new, the story is protected, or the change looks unusual (like
               removing most of the text or adding many links).
             </p>
-            {data.data?.pending.length ? data.data.pending.map((p) => <PendingCard key={p.revision.id} item={p} />) : <Empty />}
+            {data.data?.pending.length ? data.data.pending.map((p) => <PendingCard key={p.revision.id} item={p} viewerId={viewerId} />) : <Empty />}
           </>
         )}
         {tab === 'new' && (
           <>
             <p className="queue-note">Stories by newcomers stay private until a reviewer approves them.</p>
-            {data.data?.unreviewed.length ? data.data.unreviewed.map((s) => <NewStoryCard key={s.story.id} item={s} />) : <Empty />}
+            {data.data?.unreviewed.length ? data.data.unreviewed.map((s) => <NewStoryCard key={s.story.id} item={s} viewerId={viewerId} />) : <Empty />}
           </>
         )}
         {tab === 'reports' && (data.data?.reports.length ? data.data.reports.map((r) => <ReportCard key={r.id} report={r} />) : <Empty />)}
@@ -75,9 +81,24 @@ export function Watchtower() {
 
 const Empty = () => <p className="muted">All clear.</p>;
 
-function PendingCard({ item }: { item: PendingRevision }) {
+/** What else a held edit changes besides the text, so a reviewer doesn't accept a change they can't see. */
+function otherChanges(before: PendingRevision['currentRevision'], after: PendingRevision['revision']): string[] {
+  if (!before) return [];
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  const changes: string[] = [];
+  if (!same(before.sources, after.sources)) changes.push('sources');
+  if (!same([before.start, before.end, before.isOngoing, before.isApprox], [after.start, after.end, after.isOngoing, after.isApprox])) changes.push('dates');
+  if (!same([...before.cells].sort(), [...after.cells].sort())) changes.push('area on the map');
+  if (before.thumbUrl !== after.thumbUrl) changes.push('photos');
+  return changes;
+}
+
+function PendingCard({ item, viewerId }: { item: PendingRevision; viewerId: string | undefined }) {
   const { revision: r, currentRevision: c } = item;
   const review = useReviewRevision(r.storyId);
+  const toast = useToast();
+  const isNewStory = !r.parentRevisionId;
+  const changes = otherChanges(c, r);
   return (
     <div className="card">
       <div className="card-head">
@@ -86,31 +107,50 @@ function PendingCard({ item }: { item: PendingRevision }) {
           by <Link to={`/u/${r.author.id}`}>{r.author.displayName}</Link> · {timeAgo(r.createdAt)}
         </span>
       </div>
+      {c && c.title !== r.title && (
+        <div className="small title-diff"><span className="muted">Title:</span> <WordDiff before={c.title} after={r.title} /></div>
+      )}
+      {isNewStory && <p className="small"><span className="chip chip-pending">New story</span> Accepting it publishes the story.</p>}
       {r.flags.map((f) => <span key={f} className="chip chip-flag">{f.replace('-', ' ')}</span>)}
+      {changes.length > 0 && <p className="small">Also changes: {changes.join(', ')}. <Link to={`/v/${r.id}`}>See everything</Link></p>}
       {r.editSummary && <p className="small">“{r.editSummary}”</p>}
       <div className="diff-box">
         {c ? <WordDiff before={c.body} after={r.body} /> : <p>{r.body}</p>}
       </div>
-      <div className="action-row">
-        <button className="button button-primary" disabled={review.isPending} onClick={() => review.mutate({ revisionId: r.id, decision: 'accept' })}>Accept</button>
-        <button className="button button-danger" disabled={review.isPending} onClick={() => review.mutate({ revisionId: r.id, decision: 'reject' })}>Reject</button>
-      </div>
+      {r.author.id === viewerId ? (
+        <p className="small muted">This is your own edit: another reviewer has to decide on it.</p>
+      ) : (
+        <div className="action-row">
+          <button
+            className="button button-primary"
+            disabled={review.isPending}
+            onClick={() => review.mutate({ revisionId: r.id, decision: 'accept' }, { onSuccess: () => toast(isNewStory ? 'Accepted and published' : 'Accepted') })}
+          >
+            Accept
+          </button>
+          <button
+            className="button button-danger"
+            disabled={review.isPending}
+            onClick={() => review.mutate({ revisionId: r.id, decision: 'reject' }, { onSuccess: () => toast('Not accepted') })}
+          >
+            Reject
+          </button>
+        </div>
+      )}
       {review.error && <p className="error-text">{errorMessage(review.error)}</p>}
     </div>
   );
 }
 
-function NewStoryCard({ item }: { item: UnreviewedStory }) {
+function NewStoryCard({ item, viewerId }: { item: UnreviewedStory; viewerId: string | undefined }) {
   const { story, author } = item;
   const setStatus = useSetStoryStatus(story.id);
   const qc = useQueryClient();
-  const decide = (status: 'active' | 'hidden') =>
-    setStatus.mutate(status === 'active' ? { status, revisionId: item.revisionId } : { status }, {
-      // The author changed it meanwhile: reload the queue so the reviewer sees (and approves) the new text.
-      onError: (err) => {
-        if (err instanceof ApiError && err.code === 'stale') qc.invalidateQueries({ queryKey: keys.watchtower });
-      },
-    });
+  const toast = useToast();
+  const onError = (err: Error) => {
+    // The author changed it, or someone else decided meanwhile: reload so the reviewer sees the current state.
+    if (err instanceof ApiError && (err.code === 'stale' || err.code === 'already-decided')) qc.invalidateQueries({ queryKey: keys.watchtower });
+  };
   return (
     <div className="card">
       <div className="card-head">
@@ -120,10 +160,25 @@ function NewStoryCard({ item }: { item: UnreviewedStory }) {
         </span>
       </div>
       {item.excerpt && <p className="excerpt">{item.excerpt}</p>}
-      <div className="action-row">
-        <button className="button button-primary" disabled={setStatus.isPending} onClick={() => decide('active')}>Approve and publish</button>
-        <button className="button button-danger" disabled={setStatus.isPending} onClick={() => decide('hidden')}>Reject</button>
-      </div>
+      {author.id === viewerId ? (
+        <p className="small muted">This is your own story: another reviewer has to approve it.</p>
+      ) : (
+        <div className="action-row">
+          <button
+            className="button button-primary"
+            disabled={setStatus.isPending}
+            onClick={() => setStatus.mutate({ status: 'active', revisionId: item.revisionId }, { onSuccess: () => toast('Approved. The story is now public.'), onError })}
+          >
+            Approve and publish
+          </button>
+          <ConfirmAction
+            label="Reject"
+            explain="The story stays private and its author sees it as not accepted. Only a moderator can bring it back."
+            busy={setStatus.isPending}
+            onConfirm={(reason, done) => setStatus.mutate({ status: 'hidden', reason }, { onSuccess: () => { toast('Not accepted'); done(); }, onError })}
+          />
+        </div>
+      )}
       {setStatus.error && <p className="error-text">{errorMessage(setStatus.error)}</p>}
     </div>
   );
@@ -144,9 +199,11 @@ function ReportCard({ report }: { report: Report }) {
   const hide = useHideMessage();
   // Hiding a message or removing a version also closes the reports about it, so there's nothing left to resolve.
   const removeVersion = useSetRevisionRemoved(report.context.storyId ?? '');
+  const hideStory = useSetStoryStatus(report.context.storyId ?? '');
+  const toast = useToast();
   const link = reportLink(report);
-  const busy = resolve.isPending || hide.isPending || removeVersion.isPending;
-  const error = resolve.error ?? hide.error ?? removeVersion.error;
+  const busy = resolve.isPending || hide.isPending || removeVersion.isPending || hideStory.isPending;
+  const error = resolve.error ?? hide.error ?? removeVersion.error ?? hideStory.error;
   return (
     <div className="card">
       <div className="card-head">
@@ -162,19 +219,26 @@ function ReportCard({ report }: { report: Report }) {
           <button
             className="button button-danger"
             disabled={busy}
-            onClick={() => hide.mutate(report.targetId)}
+            onClick={() => hide.mutate(report.targetId, { onSuccess: () => toast('Message hidden') })}
           >
             Hide message
           </button>
         )}
+        {report.targetType === 'story' && report.context.storyId && (
+          <ConfirmAction
+            label="Hide story"
+            explain="Hidden stories are visible only to reviewers; only a moderator can bring one back. This closes the report."
+            busy={busy}
+            onConfirm={(reason, done) => hideStory.mutate({ status: 'hidden', reason }, { onSuccess: () => { toast('Story hidden'); done(); } })}
+          />
+        )}
         {report.targetType === 'revision' && (
-          <button
-            className="button button-danger"
-            disabled={busy}
-            onClick={() => removeVersion.mutate({ revisionId: report.targetId, removed: true })}
-          >
-            Remove version
-          </button>
+          <ConfirmAction
+            label="Remove version"
+            explain="Only reviewers will be able to see this version, and it can't be restored. It can't be the story's current version. This closes the report."
+            busy={busy}
+            onConfirm={(reason, done) => removeVersion.mutate({ revisionId: report.targetId, removed: true, reason }, { onSuccess: () => { toast('Removed from the history'); done(); } })}
+          />
         )}
         {report.targetType === 'user' && (
           <Link className="button" to={`/u/${report.targetId}`}>Open their page</Link>

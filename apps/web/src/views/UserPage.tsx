@@ -7,7 +7,7 @@ import { Panel } from '../components/Panel';
 import { ReportDialog } from '../components/ReportDialog';
 import { UserModTools } from '../components/UserModTools';
 import { initials, shortDate } from '../lib/format';
-import { NotFound } from './NotFound';
+import { LoadFailed, NotFound } from './NotFound';
 
 /** Someone's page (/u/:id): the basics for everyone; contributions for reviewers. */
 export function UserPage() {
@@ -21,7 +21,7 @@ export function UserPage() {
 
   if (me?.id === id) return <Navigate to="/me" replace />;
   if (profile.isLoading) return <Panel title="Loading…"><p className="muted pad">Loading…</p></Panel>;
-  if (!profile.data) return <NotFound what="person" />;
+  if (!profile.data) return profile.error ? <LoadFailed error={profile.error} what="person" retry={() => profile.refetch()} /> : <NotFound what="person" />;
   const p = profile.data;
   const role = `${TRUST_NAMES[p.trustLevel]} · joined ${shortDate(p.createdAt)}`;
 

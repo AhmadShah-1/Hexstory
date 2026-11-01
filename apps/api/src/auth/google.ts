@@ -4,6 +4,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { LIMITS, TRUST } from '@hexstory/shared';
 import { isGoogleConfigured, type Config } from '../config.js';
 import type { Sql } from '../db.js';
+import { subjectHash } from '../services/moderation.js';
 import { refreshTrust } from '../services/users.js';
 import { POLICY } from '../policy.js';
 import { SESSION_COOKIE, createSession, deleteSession, sessionCookieOptions } from './sessions.js';
@@ -72,6 +73,10 @@ export const googleAuthRoutes =
       if (!claims.sub || !claims.email || claims.email_verified === false) {
         return reply.redirect('/?signin=failed');
       }
+
+      // A banned person whose account a moderator deleted stays out.
+      const [blocked] = await sql`SELECT 1 FROM banned_subjects WHERE sub_hash = ${subjectHash(claims.sub)}`;
+      if (blocked) return reply.redirect('/?signin=banned');
 
       const userId = await upsertGoogleUser(sql, config, claims);
       const [user] = await sql<{ bannedAt: Date | null }[]>`SELECT banned_at AS "bannedAt" FROM users WHERE id = ${userId}`;

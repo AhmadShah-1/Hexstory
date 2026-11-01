@@ -14,13 +14,21 @@ const REASON_LABELS: Record<ReportReason, string> = {
   other: 'Something else',
 };
 
+const TITLES: Record<ReportTarget, string> = {
+  story: 'Report this story',
+  revision: 'Report this version',
+  comment: 'Report this message',
+  user: 'Report this person',
+};
+
 export function ReportDialog({ open, onClose, targetType, targetId }: {
   open: boolean;
   onClose: () => void;
   targetType: ReportTarget;
   targetId: string;
 }) {
-  const [reason, setReason] = useState<ReportReason>('vandalism');
+  // Start from the likeliest reason for what is being reported.
+  const [reason, setReason] = useState<ReportReason>(targetType === 'story' || targetType === 'revision' ? 'vandalism' : 'harassment');
   const [details, setDetails] = useState('');
   const report = useReport();
   const toast = useToast();
@@ -37,8 +45,9 @@ export function ReportDialog({ open, onClose, targetType, targetId }: {
     );
 
   return (
-    <Modal open={open} onClose={onClose} title="Report">
+    <Modal open={open} onClose={onClose} title={TITLES[targetType]}>
       <fieldset className="radio-list">
+        <legend className="field-label">What's wrong?</legend>
         {REPORT_REASONS.map((r) => (
           <label key={r}>
             <input type="radio" name="reason" checked={reason === r} onChange={() => setReason(r)} />

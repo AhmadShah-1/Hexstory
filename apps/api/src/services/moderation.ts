@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   TRUST,
   type AuditEntry,
@@ -24,25 +25,38 @@ export type LiveHide = { id: string; cell: string }[];
 
 const CLEANUP_REASON = 'Ban clean-up';
 
+/** How a deleted banned person's Google account is remembered (never the raw ID). */
+export const subjectHash = (googleSub: string) => createHash('sha256').update(googleSub).digest('hex');
+
 function assertModerator(actor: SessionUser) {
   if (actor.trustLevel < TRUST.MODERATOR) throw forbidden();
 }
 
 interface TargetRow {
   id: string;
+  email: string | null;
+  googleSub: string;
   trustLevel: TrustLevel;
   bannedAt: Date | null;
   deletedAt: Date | null;
 }
 
-/** Locks the user an action is about and checks it may be applied to them at all. */
-async function lockTarget(tx: Db, actor: SessionUser, userId: string): Promise<TargetRow> {
+/**
+ * Locks the user an action is about and checks it may be applied to them at all. Moderators are the
+ * people listed in ADMIN_EMAILS (`adminEmails`): someone stored as a Moderator but no longer listed is
+ * corrected to Reviewer here, so they can be banned or re-levelled without waiting for them to sign in.
+ */
+async function lockTarget(tx: Db, actor: SessionUser, userId: string, adminEmails: readonly string[]): Promise<TargetRow> {
   if (actor.id === userId) throw forbidden('You cannot do that to your own account.');
   const [target] = await tx<TargetRow[]>`
-    SELECT id, trust_level, banned_at, deleted_at FROM users WHERE id = ${userId} FOR UPDATE`;
+    SELECT id, email, google_sub, trust_level, banned_at, deleted_at FROM users WHERE id = ${userId} FOR UPDATE`;
   if (!target || target.deletedAt) throw notFound('User');
   if (target.trustLevel >= TRUST.MODERATOR) {
-    throw forbidden('Moderators can’t be banned, deleted or changed here: their access comes from ADMIN_EMAILS.');
+    if (target.email && adminEmails.includes(target.email.toLowerCase())) {
+      throw forbidden('Moderators can’t be banned, deleted or changed here: their access comes from ADMIN_EMAILS.');
+    }
+    await tx`UPDATE users SET trust_level = ${TRUST.REVIEWER} WHERE id = ${userId}`;
+    target.trustLevel = TRUST.REVIEWER;
   }
   return target;
 }
@@ -60,6 +74,9 @@ const openReportsAboutUser = (sql: Db) => sql`(
 // User pages
 
 export async function getUserProfile(sql: Sql, viewer: SessionUser | null, userId: string): Promise<UserProfile> {
+  // Promotion is otherwise re-checked only on activity, so someone who just reached the age threshold
+  // would see full progress bars and no promotion. Checking on their own page fixes that.
+  if (viewer?.id === userId) await refreshTrust(sql, userId);
   const [u] = await sql<
     { id: string; displayName: string; trustLevel: TrustLevel; trustLocked: boolean; createdAt: Date; bannedAt: Date | null; deletedAt: Date | null }[]
   >`SELECT id, display_name, trust_level, trust_locked, created_at, banned_at, deleted_at FROM users WHERE id = ${userId}`;
@@ -78,19 +95,21 @@ export async function getUserProfile(sql: Sql, viewer: SessionUser | null, userI
   if (!self && !reviewer) return profile;
 
   const [stats] = await sql<
-    { storiesStarted: number; storiesLive: number; edits: number; editsLive: number; editsWaiting: number; editsRejected: number;
+    { storiesStarted: number; storiesLive: number; edits: number; editsAccepted: number; editsWaiting: number; editsRejected: number;
+      editsRemoved: number;
       messages: number; storiesToday: number; editsToday: number; uploadsToday: number; uploadBytesToday: number }[]
   >`
     SELECT
       (SELECT count(*)::int FROM stories WHERE created_by = ${userId}) AS stories_started,
       (SELECT count(*)::int FROM stories WHERE created_by = ${userId} AND status = 'active' AND current_revision_id IS NOT NULL) AS stories_live,
-      (SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId}) AS edits,
-      (SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId} AND status = 'accepted' AND hidden_at IS NULL) AS edits_live,
-      (SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId} AND status = 'pending') AS edits_waiting,
-      (SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId} AND status = 'rejected') AS edits_rejected,
+      (SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId} AND origin IN ('create', 'edit')) AS edits,
+      (SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId} AND origin IN ('create', 'edit') AND status = 'accepted' AND hidden_at IS NULL) AS edits_accepted,
+      (SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId} AND origin IN ('create', 'edit') AND status = 'pending' AND hidden_at IS NULL) AS edits_waiting,
+      (SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId} AND origin IN ('create', 'edit') AND status = 'rejected' AND hidden_at IS NULL) AS edits_rejected,
+      (SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId} AND origin IN ('create', 'edit') AND hidden_at IS NOT NULL) AS edits_removed,
       (SELECT count(*)::int FROM comments WHERE user_id = ${userId} AND hidden_at IS NULL) AS messages,
       (SELECT count(*)::int FROM stories WHERE created_by = ${userId} AND created_at > now() - interval '1 day') AS stories_today,
-      (SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId} AND created_at > now() - interval '1 day') AS edits_today,
+      (SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId} AND origin = 'edit' AND created_at > now() - interval '1 day') AS edits_today,
       (SELECT count(*)::int FROM uploads WHERE user_id = ${userId} AND created_at > now() - interval '1 day') AS uploads_today,
       (SELECT COALESCE(sum(declared_bytes), 0)::float8 FROM uploads WHERE user_id = ${userId} AND created_at > now() - interval '1 day') AS upload_bytes_today`;
   const { storiesToday, editsToday, uploadsToday, uploadBytesToday, ...counts } = stats!;
@@ -140,7 +159,7 @@ async function userRows(sql: Db, where: PendingQuery<Row[]>, offset: number, lim
   const rows = await sql<(Omit<ModUserRow, 'createdAt' | 'bannedAt'> & { createdAt: Date; bannedAt: Date | null })[]>`
     SELECT u.id, u.display_name, u.trust_level, u.trust_locked, u.created_at, u.banned_at,
            (SELECT count(*)::int FROM stories s WHERE s.created_by = u.id) AS stories,
-           (SELECT count(*)::int FROM story_revisions r WHERE r.author_id = u.id) AS edits,
+           (SELECT count(*)::int FROM story_revisions r WHERE r.author_id = u.id AND r.origin IN ('create', 'edit')) AS edits,
            ${openReportsAboutUser(sql)} AS open_reports,
            (SELECT count(*)::int FROM ban_requests b WHERE b.user_id = u.id AND b.resolved_at IS NULL) AS open_ban_requests
     FROM users u
@@ -188,10 +207,10 @@ async function openBanRequests(sql: Db, userIds: string[]): Promise<(BanRequest 
   }));
 }
 
-export async function requestBan(sql: Sql, actor: SessionUser, userId: string, reason: string): Promise<void> {
+export async function requestBan(sql: Sql, actor: SessionUser, userId: string, reason: string, adminEmails: readonly string[]): Promise<void> {
   if (!canReview(actor.trustLevel)) throw forbidden();
   await sql.begin(async (tx) => {
-    const target = await lockTarget(tx, actor, userId);
+    const target = await lockTarget(tx, actor, userId, adminEmails);
     if (target.bannedAt) throw conflict('This account is already banned.');
     const [row] = await tx`
       INSERT INTO ban_requests (user_id, requested_by, reason) VALUES (${userId}, ${actor.id}, ${reason})
@@ -277,8 +296,8 @@ async function removeContentOf(tx: Db, actor: SessionUser, userId: string): Prom
     const story = await fetchStory(tx, id, true);
     if (!story) continue;
     if (fallback) {
-      await copyToNewRevision(tx, story, fallback, actor.id, 'Rolled back changes by a removed account');
-      await logModAction(tx, actor.id, 'rollback', 'story', id, CLEANUP_REASON);
+      await copyToNewRevision(tx, story, fallback, actor.id, 'Rolled back changes by a removed account', 'rollback');
+      await logModAction(tx, actor.id, 'rollback', 'story', id, CLEANUP_REASON, { revisionId: fallback });
       summary.storiesRolledBack++;
     } else {
       await tx`UPDATE stories SET status = 'hidden', updated_at = now() WHERE id = ${id}`;
@@ -325,10 +344,11 @@ export async function setBanned(
   actor: SessionUser,
   userId: string,
   input: { banned: boolean; reason: string | null; removeContent: boolean },
+  adminEmails: readonly string[],
 ): Promise<{ cleanup: CleanupSummary | null; liveHide: LiveHide }> {
   assertModerator(actor);
   const result = await sql.begin(async (tx) => {
-    const target = await lockTarget(tx, actor, userId);
+    const target = await lockTarget(tx, actor, userId, adminEmails);
     if (!input.banned) {
       if (!target.bannedAt) throw conflict('This account is not banned.');
       await tx`UPDATE users SET banned_at = NULL WHERE id = ${userId}`;
@@ -364,10 +384,15 @@ export async function deleteUser(
   actor: SessionUser,
   userId: string,
   input: { reason: string | null; removeContent: boolean },
+  adminEmails: readonly string[],
 ): Promise<{ cleanup: CleanupSummary | null; liveHide: LiveHide }> {
   assertModerator(actor);
   const result = await sql.begin(async (tx) => {
-    await lockTarget(tx, actor, userId);
+    const target = await lockTarget(tx, actor, userId, adminEmails);
+    // Deleting resets the Google link, which would let a banned person sign up again: remember them.
+    if (target.bannedAt) {
+      await tx`INSERT INTO banned_subjects (sub_hash) VALUES (${subjectHash(target.googleSub)}) ON CONFLICT DO NOTHING`;
+    }
     const cleanup = input.removeContent ? await removeContentOf(tx, actor, userId) : null;
     const liveHide = input.removeContent ? await recentMessages(tx, userId) : [];
     const requests = await resolveBanRequests(tx, actor.id, userId, 'deleted');
@@ -375,6 +400,7 @@ export async function deleteUser(
     await anonymizeUser(tx, userId);
     await logModAction(tx, actor.id, 'delete-user', 'user', userId, input.reason, {
       removeContent: input.removeContent,
+      wasBanned: !!target.bannedAt,
       requestsResolved: requests,
       reportsClosed: reports + (cleanup?.reportsClosed ?? 0),
       ...(cleanup ?? {}),
@@ -390,19 +416,35 @@ export async function deleteUser(
  * automatic promotion for them, or (`auto`) hands their level back to the automatic rules, which may
  * promote them again straight away but never demote.
  */
-export async function setTrustLevel(sql: Sql, actor: SessionUser, userId: string, level: 0 | 1 | 2 | 'auto', reason: string | null) {
+export async function setTrustLevel(
+  sql: Sql,
+  actor: SessionUser,
+  userId: string,
+  level: 0 | 1 | 2 | 'auto',
+  reason: string | null,
+  adminEmails: readonly string[],
+) {
   assertModerator(actor);
-  await sql.begin(async (tx) => {
-    const target = await lockTarget(tx, actor, userId);
+  const from = await sql.begin(async (tx) => {
+    const target = await lockTarget(tx, actor, userId, adminEmails);
     if (level === 'auto') {
       await tx`UPDATE users SET trust_locked = false WHERE id = ${userId}`;
-      await logModAction(tx, actor.id, 'trust:auto', 'user', userId, reason, { from: target.trustLevel });
     } else {
+      if (target.trustLevel === level) {
+        const [row] = await tx<{ trustLocked: boolean }[]>`SELECT trust_locked FROM users WHERE id = ${userId}`;
+        if (row?.trustLocked) return null; // already set to this by hand: nothing to record
+      }
       await tx`UPDATE users SET trust_level = ${level}, trust_locked = true WHERE id = ${userId}`;
       await logModAction(tx, actor.id, `trust:${level}`, 'user', userId, reason, { from: target.trustLevel });
     }
+    return target.trustLevel;
   });
-  if (level === 'auto') await refreshTrust(sql, userId);
+  if (level === 'auto' && from !== null) {
+    // Record where the automatic rules put them, which may be a promotion.
+    await refreshTrust(sql, userId);
+    const [row] = await sql<{ trustLevel: number }[]>`SELECT trust_level FROM users WHERE id = ${userId}`;
+    await logModAction(sql, actor.id, 'trust:auto', 'user', userId, reason, { from, to: row?.trustLevel ?? from });
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

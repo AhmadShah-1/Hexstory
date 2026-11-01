@@ -259,15 +259,16 @@ Browser ── React SPA ────┼── pages, /api, /auth ─┐
 |---|---|
 | `users` | Google `sub`, email (private), public `display_name` (unique, case-insensitive), `trust_level` 0–3, `trust_locked` (level set by a Moderator), `terms_accepted_at`, `banned_at`, `deleted_at` |
 | `sessions` | `id` = SHA-256 of the cookie token (raw token never stored), expiry (30 days, sliding) |
-| `stories` | Identity + pointer `current_revision_id`, `status` (unreviewed/active/hidden), `protection_level`, `cell_count` |
-| `story_revisions` | Append-only content: title, `content` (rich document, jsonb), `body` (plain text derived from content), `image_key`/`image_credit` (the first image, used as thumbnail), compact cells, dates, sources (jsonb, ≥1 enforced by CHECK), `status` (pending/accepted/rejected), `flags`, `hidden_at` (removed from the history), generated `source_count` and `sort_key` |
+| `stories` | Identity + pointer `current_revision_id`, `status` (unreviewed/active/hidden), `protection_level`, `cell_count`, `published_at` + `published_revision_id` (when it first became public, and with which version; migration 006) |
+| `story_revisions` | Append-only content: title, `content` (rich document, jsonb), `body` (plain text derived from content), `image_key`/`image_credit` (the first image, used as thumbnail), compact cells, dates, sources (jsonb, ≥1 enforced by CHECK), `status` (pending/accepted/rejected), `flags`, `hidden_at` (removed from the history), `origin` (create/edit/restore/rollback: copies aren't counted as the copier's edits), generated `source_count` and `sort_key` |
 | `story_cells` | Derived index of the current revision's cells at res 2–5 |
 | `comments` | The Square's messages, per display cell |
 | `reports` | User reports on stories, revisions, comments or users |
 | `mod_actions` | Append-only audit log of every moderation action, with optional `details` (jsonb) |
 | `ban_requests` | Reviewers asking Moderators to ban someone; resolved as banned/declined/deleted (migration 004) |
 | `site_settings` | Runtime settings Moderators change, e.g. `rules` overrides (migration 005) |
-| `uploads` | One row per photo upload slot: declared original size, stored WebP size; daily quotas (migration 005) |
+| `uploads` | One row per photo upload slot: declared original size, stored WebP size; daily quotas; each slot is completed at most once (migration 005) |
+| `banned_subjects` | SHA-256 of the Google account of banned people whose account was deleted, so they can't sign up again (migration 006) |
 | `app_meta` | Facts about the database itself; `environment` = which deployment environment owns it (migration 003) |
 | `schema_migrations` | Applied migration files |
 
@@ -381,6 +382,19 @@ Moderators can't ban, delete or re-level other Moderators or themselves.
     `remove-version`, `restore-version`, `report:dismissed|actioned`, `ban-request`, `ban-request:declined`,
     `ban`, `ban:clean-up`, `unban`, `trust:0|1|2|auto`, `delete-user`.
 
+**Publication and decisions.** A story records when it first became public and with which version
+(`published_at`, `published_revision_id`). Non-reviewers see only accepted versions from that point on, so
+a newcomer's earlier drafts, which no reviewer read, stay visible to their author and reviewers only.
+Decisions are not repeatable: approving needs a story still waiting (409 `already-decided` otherwise, so a
+stale card can't undo another reviewer's rejection), hiding an already hidden story is refused, and Unhide
+puts a never-published story back in the review queue instead of publishing it. Restores carry the version
+that was current (409 if it moved, so a double click doesn't make two copies). Accepting a held edit respects
+protection like editing and restoring do. Hiding a story closes the reports about it; held edits to hidden
+stories and from banned people stay out of the review queues. A person's promotion is also re-checked when
+they open their own page. Someone stored as a Moderator but no longer in `ADMIN_EMAILS` is corrected to
+Reviewer on their next request or when a Moderator acts on them, and deleting a banned account keeps them out
+(`banned_subjects`).
+
 **Contributions.** Everyone has a page (`/u/:id`): name, role and join date are public; the lists of stories
 they started and versions they wrote (with status, including private and removed ones) are shown to them and
 to Reviewers only, to avoid making it easy to profile someone from everything they wrote. Your own page is
@@ -394,7 +408,13 @@ to Reviewers only, to avoid making it easy to profile someone from everything th
 - Anyone can listen; posting requires a signed-in user who accepted the terms and isn't banned.
   Newcomer accounts can post after 10 minutes. 1 message / 2 s per user, 500 characters max.
 - Every `send` re-reads the session, so bans and sign-outs apply instantly.
-- Flood control: more than 30 events per 10 s on one connection drops it (per connection, in memory).
+- Flood control: more than 30 events per 10 s on one connection drops it (per connection, in memory); a
+  second message within the chat interval on one connection is refused before any database work.
+- Connection limits (WebSocket upgrades never pass Fastify's rate limit): at most 20 open connections per
+  address per instance, counted when the transport opens, and 60 new connections per address per minute
+  across instances (a Redis counter; if Redis is down only the per-instance limit applies).
+- A malformed session cookie is treated as no session; connection setup errors close that socket rather than
+  the process (Socket.IO runs the handler outside any error handling).
 - History: last 50 visible messages via `GET /api/cells/:cell/messages`; Reviewers can hide messages.
 
 **Across instances** (`coordination.ts`). Each WebSocket stays on the instance that accepted it. Broadcasts
@@ -437,7 +457,7 @@ failed. Two Redis connections per instance (commands + subscriber).
 | Content injection | Strict CSP (`script-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`; allow-listed: tiles origin, the R2 image domain in `img-src`, the R2 S3 endpoint in `connect-src`), `nosniff`, Helmet defaults. `index.html` is always served by Fastify so these headers apply on Vercel too |
 | SQL injection | Only parameterised postgres.js queries; identifiers only from fixed maps; `sql.unsafe` only runs migration files |
 | Malicious uploads | Originals (max 6 MB) go to a **private staging bucket** through a pre-signed PUT that is valid for 5 minutes and signs the exact byte count and `application/octet-stream`; the key is `<userId>/<uploadId>` and completion rebuilds it from the session, so nobody can claim another user's upload. The API then reads the original (size re-checked), decodes and **re-encodes to WebP** with sharp (strips EXIF/GPS, rejects non-images, 50 MP cap), publishes full + thumbnail, and deletes the original. If either write fails both are removed and the client gets an error. Staged leftovers expire by an R2 lifecycle rule (1 day). No URL fetching. 20 upload slots/hour/user. R2 credentials never reach the browser |
-| Resource abuse | 300 req/min/IP global and the upload limits, shared across instances in Redis (fail open if Redis is down; the daily limits in Postgres still apply), per-user daily limits, area size checked before expansion, 512 KB body limit, Socket.IO flood control |
+| Resource abuse | 300 req/min/IP global and the upload limits, shared across instances in Redis (fail open if Redis is down; the daily limits in Postgres still apply), per-user daily limits, area size checked before expansion, 256 KB body limit, Socket.IO connection limits and flood control |
 | Spoofed client IPs | Fastify trusts `X-Forwarded-For` only with `TRUST_PROXY=true` (default on Vercel, which overwrites the header with the real client IP) |
 | Environment mix-ups | Database environment marker checked at build and start; migrations only by explicit command over a direct connection; Redis keys prefixed per environment (§4) |
 | Privacy | Emails and Google IDs never leave the API; Google profile pictures and full names are never stored; account deletion anonymises the user and deletes sessions |
@@ -610,8 +630,9 @@ Designed so features can be added without touching unrelated code:
 - **Backups:** on Neon, point-in-time restore within the plan's history window plus a periodic `pg_dump -Fc`
   of `DATABASE_URL_UNPOOLED` kept elsewhere; R2 objects are durable but not versioned (DEPLOYMENT.md §2). On a
   single server: nightly `pg_dump -Fc` and a copy of `UPLOAD_DIR`, both off the server. Test a restore.
-- **Before launch:** fill the placeholders in `legal/*.md` (`[DATE]`, `[CONTACT EMAIL]`, `[JURISDICTION]`,
-  chat retention); have a lawyer review; register a DMCA agent if operating in the US; publish the
+- **Before launch:** fill the remaining placeholders in `legal/*.md` (`[JURISDICTION]` in the Terms, the
+  chat retention period in the Privacy Policy; the date and the contact address hexstory.world@gmail.com are
+  filled in, and the "Last updated" dates must change whenever the text does); have a lawyer review; register a DMCA agent if operating in the US; publish the
   Privacy/Terms URLs on the Google OAuth consent screen.
 
 ## 13. Known limitations / follow-ups
@@ -637,6 +658,20 @@ Designed so features can be added without touching unrelated code:
 
 ## Changelog
 
+- **2026-11-01**: Security and flow review fixes. Security: a malformed session cookie on a Socket.IO
+  connection could crash the process (now parsed safely, setup errors contained); Socket.IO connection limits
+  per address; chat sends gated before database work; newcomer drafts no longer become public when the story
+  is approved; upload slots complete once (no replacing a published image); moderators taken off
+  ADMIN_EMAILS can be acted on; deleted banned accounts stay out; reviewers can't accept edits on stories
+  protected above their level; the API/CSRF check uses the routed path; patched `glob`/`minimatch` via an npm
+  override. Flows: editor keeps the version it opened (no silent overwrite) and asks before discarding a
+  draft; repeat/stale approve, hide and restore refused; Unhide returns never-approved stories to review;
+  version pages refresh after review; restore hidden where it would fail; reviewers aren't offered their own
+  items; rejected new stories read "Not accepted"; new stories don't use up the edit allowance and restore
+  copies aren't counted as edits; promotion re-checked on your own page; inline confirmations with reasons
+  for hide, reject and remove; title/other-change hints in the Watchtower; load errors distinguished from
+  "not found"; richer audit details. Migration `006_publication.sql`. Terms and Privacy Policy dated
+  1 November 2026 with the contact address hexstory.world@gmail.com.
 - **2026-11-01**: Support page (`/support`, `GET /api/support`; `STRIPE_SUPPORT_URL`, `PAYPAL_SUPPORT_URL`
   validated against exact provider hosts, invalid values hidden with a startup warning) and a moderator-only
   Resource usage dashboard (`/api/moderation/usage`, `/refresh`): Neon database size and Redis INFO from our

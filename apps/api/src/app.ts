@@ -99,7 +99,9 @@ export async function buildApp({
 
   app.decorateRequest('user', null);
   app.addHook('onRequest', async (req) => {
-    const isApi = req.url.startsWith('/api/') || req.url.startsWith('/auth/');
+    // Decide by the route that matched (the router decodes the path; `/%61pi/...` routes like `/api/...`).
+    const path = req.routeOptions.url ?? req.url;
+    const isApi = path.startsWith('/api/') || path.startsWith('/auth/');
     if (!isApi) return;
     // CSRF protection: state-changing requests must come from our own pages.
     if (!SAFE_METHODS.has(req.method) && req.headers.origin !== config.APP_ORIGIN) {
@@ -108,8 +110,10 @@ export async function buildApp({
     const user = await getSessionUser(sql, req.cookies[SESSION_COOKIE]);
     // Moderator access follows ADMIN_EMAILS: taking someone off the list takes effect on their next
     // request, not only at their next sign-in (which also stores the lower level).
+    // It is stored too, so their profile and moderators' tools stop treating them as a Moderator.
     if (user && user.trustLevel >= TRUST.MODERATOR && !config.ADMIN_EMAILS.includes(user.email ?? '')) {
       user.trustLevel = TRUST.REVIEWER;
+      await sql`UPDATE users SET trust_level = ${TRUST.REVIEWER} WHERE id = ${user.id} AND trust_level > ${TRUST.REVIEWER}`;
     }
     req.user = user;
   });
@@ -129,7 +133,14 @@ export async function buildApp({
     return reply.code(500).send({ error: 'internal', message: 'Something went wrong on our side. Please try again.' });
   });
 
-  const square = await attachSquare(app.server, { sql, appOrigin: config.APP_ORIGIN, coordinator, log: app.log, heartbeatMs });
+  const square = await attachSquare(app.server, {
+    sql,
+    appOrigin: config.APP_ORIGIN,
+    coordinator,
+    log: app.log,
+    heartbeatMs,
+    trustProxy: config.TRUST_PROXY,
+  });
   app.addHook('preClose', () => square.close());
   const deps: Deps = { config, sql, storage, square };
 

@@ -15,6 +15,7 @@ const STORY_STATE: Record<ContributionStory['state'], { label: string; chip: str
 /** Stories someone started, including ones that aren't public. For the person themself and reviewers. */
 export function StoriesList({ userId }: { userId: string }) {
   const query = useUserStories(userId);
+  const isReviewer = (useSession().data?.user?.trustLevel ?? 0) >= TRUST.REVIEWER;
   const items = query.data?.pages.flatMap((p) => p.items) ?? [];
 
   if (query.isLoading) return <p className="muted pad">Loading stories…</p>;
@@ -34,6 +35,8 @@ export function StoriesList({ userId }: { userId: string }) {
         <StoryRow
           key={story.id}
           story={story}
+          // Hidden stories are for reviewers only; their author sees the row but can't open it.
+          linked={story.status !== 'hidden' || isReviewer}
           note={
             <>
               <span className={`chip ${STORY_STATE[state].chip}`}>{STORY_STATE[state].label}</span>
@@ -98,7 +101,7 @@ function EditSummary({ edit: e }: { edit: ContributionEdit }) {
         ) : e.isCurrent ? (
           <span className="chip chip-current">Current</span>
         ) : e.status === 'accepted' ? (
-          <span className="chip chip-quiet chip-gap">Live</span>
+          <span className="chip chip-quiet chip-gap">Accepted</span>
         ) : e.status === 'pending' ? (
           <span className="chip chip-pending">Waiting for review</span>
         ) : (
@@ -137,7 +140,8 @@ export function StatsGrid({ stats }: { stats: UserStats }) {
         <dt>Versions written</dt>
         <dd>{stats.edits}</dd>
         <dd className="muted small">
-          {stats.editsLive} live · {stats.editsWaiting} waiting · {stats.editsRejected} not accepted
+          {stats.editsAccepted} accepted · {stats.editsWaiting} waiting · {stats.editsRejected} not accepted
+          {stats.editsRemoved > 0 && ` · ${stats.editsRemoved} removed`}
         </dd>
       </div>
       <div>

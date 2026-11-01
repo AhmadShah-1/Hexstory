@@ -10,7 +10,7 @@ import { useToast } from '../components/Toast';
 import { WordDiff } from '../components/WordDiff';
 import { shortDate } from '../lib/format';
 import { useMapState } from '../map/MapContext';
-import { NotFound } from './NotFound';
+import { LoadFailed, NotFound } from './NotFound';
 
 export function RevisionView() {
   const { revisionId = '' } = useParams();
@@ -30,7 +30,9 @@ export function RevisionView() {
   }, [cells, setStoryCells]);
 
   if (revision.isLoading) return <Panel title="Loading…"><p className="muted pad">Loading…</p></Panel>;
-  if (!revision.data) return <NotFound what="version" />;
+  if (!revision.data) {
+    return revision.error ? <LoadFailed error={revision.error} what="version" retry={() => revision.refetch()} /> : <NotFound what="version" />;
+  }
   const r = revision.data;
   const isCurrent = story.data?.revision.id === r.id;
   const viewer = session.data?.user;
@@ -54,9 +56,13 @@ export function RevisionView() {
             revisionId={r.id}
             status={r.status}
             isCurrent={isCurrent}
+            isFirst={!r.parentRevisionId}
             removed={r.removed}
             isAuthor={viewer?.id === r.author.id}
-            isModerator={(viewer?.trustLevel ?? 0) >= TRUST.MODERATOR}
+            viewerLevel={viewer?.trustLevel ?? 0}
+            protectionLevel={story.data.protectionLevel}
+            storyStatus={story.data.status}
+            currentRevisionId={story.data.revision.id}
           />
         )}
         {parent.data && (
@@ -93,14 +99,18 @@ export function RevisionView() {
  * Reviewer actions on one version. Nobody reviews or restores their own work; removing a version
  * (e.g. it exposed someone's personal details) hides it from the history for good, unless a moderator puts it back.
  */
-function ReviewBar({ storyId, revisionId, status, isCurrent, removed, isAuthor, isModerator }: {
+function ReviewBar({ storyId, revisionId, status, isCurrent, isFirst, removed, isAuthor, viewerLevel, protectionLevel, storyStatus, currentRevisionId }: {
   storyId: string;
   revisionId: string;
   status: string;
   isCurrent: boolean;
+  isFirst: boolean;
   removed: boolean;
   isAuthor: boolean;
-  isModerator: boolean;
+  viewerLevel: number;
+  protectionLevel: number;
+  storyStatus: string;
+  currentRevisionId: string;
 }) {
   const review = useReviewRevision(storyId);
   const restore = useRestoreRevision(storyId);
@@ -110,9 +120,13 @@ function ReviewBar({ storyId, revisionId, status, isCurrent, removed, isAuthor, 
   const [removing, setRemoving] = useState(false);
   const [reason, setReason] = useState('');
   const error = review.error ?? restore.error ?? setRemoved.error;
+  const busy = review.isPending || restore.isPending || setRemoved.isPending;
+  const isModerator = viewerLevel >= TRUST.MODERATOR;
+  // Protection decides who can put a change live: editing, accepting someone's edit, or restoring.
+  const mayPutLive = viewerLevel >= Math.max(TRUST.MEMBER, protectionLevel);
 
-  const canDecide = status === 'pending' && !isAuthor && !removed;
-  const canRestore = status !== 'pending' && !isCurrent && !isAuthor && !removed;
+  const canDecide = status === 'pending' && !isAuthor && !removed && storyStatus !== 'hidden';
+  const canRestore = status === 'accepted' && !isCurrent && !isAuthor && !removed && mayPutLive && storyStatus !== 'unreviewed';
   const canRemove = !isCurrent && !removed;
   const canPutBack = removed && isModerator;
   if (!canDecide && !canRestore && !canRemove && !canPutBack) return null;
@@ -127,22 +141,40 @@ function ReviewBar({ storyId, revisionId, status, isCurrent, removed, isAuthor, 
     <div className="review-bar">
       {canDecide && (
         <>
-          <span>This edit is waiting for review.</span>
-          <button className="button button-primary" onClick={() => review.mutate({ revisionId, decision: 'accept' }, { onSuccess: () => { toast('Accepted'); navigate(`/s/${storyId}`); } })}>
-            Accept
-          </button>
-          <button className="button button-danger" onClick={() => review.mutate({ revisionId, decision: 'reject' }, { onSuccess: () => toast('Rejected') })}>
+          <span>
+            {isFirst && storyStatus === 'unreviewed'
+              ? 'This new story is waiting for review. Accepting it publishes the story.'
+              : 'This edit is waiting for review.'}
+          </span>
+          {mayPutLive ? (
+            <button
+              className="button button-primary"
+              disabled={busy}
+              onClick={() => review.mutate({ revisionId, decision: 'accept' }, {
+                onSuccess: () => { toast(isFirst && storyStatus === 'unreviewed' ? 'Accepted and published' : 'Accepted'); navigate(`/s/${storyId}`); },
+              })}
+            >
+              Accept
+            </button>
+          ) : (
+            <span className="muted small">This story is protected: only a moderator can accept edits to it.</span>
+          )}
+          <button className="button button-danger" disabled={busy} onClick={() => review.mutate({ revisionId, decision: 'reject' }, { onSuccess: () => toast('Not accepted') })}>
             Reject
           </button>
         </>
       )}
       {canRestore && (
-        <button className="button" onClick={() => restore.mutate(revisionId, { onSuccess: () => { toast('Restored'); navigate(`/s/${storyId}`); } })}>
+        <button
+          className="button"
+          disabled={busy}
+          onClick={() => restore.mutate({ revisionId, baseRevisionId: currentRevisionId }, { onSuccess: () => { toast('Restored'); navigate(`/s/${storyId}`); } })}
+        >
           Restore this version
         </button>
       )}
       {canRemove && !removing && (
-        <button className="button button-danger" onClick={() => setRemoving(true)}>Remove from history</button>
+        <button className="button button-danger" disabled={busy} onClick={() => setRemoving(true)}>Remove from history</button>
       )}
       {canPutBack && (
         <button className="button" disabled={setRemoved.isPending} onClick={() => setRemoved.mutate({ revisionId, removed: false }, { onSuccess: () => toast('Put back in the history') })}>

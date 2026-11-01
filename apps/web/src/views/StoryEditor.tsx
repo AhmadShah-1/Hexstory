@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useBlocker, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   LIMITS,
   TRUST,
@@ -18,6 +18,7 @@ import { useCreateStory, useEditStory, useSession, useStory } from '../api/queri
 import { Panel } from '../components/Panel';
 import { RichEditor } from '../components/RichEditor';
 import { SignInPrompt } from '../components/SignInPrompt';
+import { NotFound } from './NotFound';
 import { useToast } from '../components/Toast';
 import { areaKm2 } from '../lib/format';
 import { useMapState } from '../map/MapContext';
@@ -79,7 +80,23 @@ export function StoryEditor() {
   const story = useStory(id);
   const session = useSession();
 
-  if (id && story.isLoading) return <Panel title="Loading…"><p className="muted pad">Loading…</p></Panel>;
+  // Wait for a fresh copy: the draft and the version it is based on are fixed when the form opens, so a
+  // cached, older version would make the save overwrite whatever changed since.
+  if (id && (story.isLoading || (story.isFetching && !story.isFetchedAfterMount))) {
+    return <Panel title="Loading…"><p className="muted pad">Loading…</p></Panel>;
+  }
+  if (id && !story.data) return <NotFound what="story" />;
+  if (story.data && !story.data.can.edit && session.data?.user) {
+    return (
+      <Panel title="Edit story" back={{ label: 'Back to story', to: `/s/${story.data.id}` }}>
+        <p className="pad">
+          {story.data.revision.status === 'pending'
+            ? "This story's first version is still waiting for a reviewer, so it can't be edited yet."
+            : "You can't edit this story right now."}
+        </p>
+      </Panel>
+    );
+  }
   if (!session.data?.user) {
     return (
       <Panel title={id ? 'Edit story' : 'Write a story'}>
@@ -90,7 +107,9 @@ export function StoryEditor() {
   return <EditorForm key={id ?? 'new'} story={story.data} />;
 }
 
-function EditorForm({ story }: { story: StoryDetail | undefined }) {
+function EditorForm({ story: loaded }: { story: StoryDetail | undefined }) {
+  // Fixed for the life of the form: a background refetch must not change the version the edit is based on.
+  const [story] = useState(loaded);
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const toast = useToast();
@@ -127,12 +146,20 @@ function EditorForm({ story }: { story: StoryDetail | undefined }) {
   }, [story, startCell, setMode, setSelection, focusCells]);
 
   const [dirty, setDirty] = useState(false);
+  const saved = useRef(false);
   useEffect(() => {
     if (!dirty) return;
     const warn = (e: BeforeUnloadEvent) => e.preventDefault();
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
+  // Leaving inside the app (Cancel, ×, Escape, Back, a link) with unsaved changes asks first.
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && !saved.current && currentLocation.pathname !== nextLocation.pathname);
+  useEffect(() => {
+    if (blocker.state !== 'blocked') return;
+    if (window.confirm('Leave without saving? Your changes will be lost.')) blocker.proceed();
+    else blocker.reset();
+  }, [blocker]);
 
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => {
     setDirty(true);
@@ -162,6 +189,7 @@ function EditorForm({ story }: { story: StoryDetail | undefined }) {
     }
     setErrors({});
     const onSuccess = (res: WriteResult) => {
+      saved.current = true;
       if (res.status === 'pending') {
         toast(story
           ? 'Thanks! Your edit will appear once a reviewer accepts it.'

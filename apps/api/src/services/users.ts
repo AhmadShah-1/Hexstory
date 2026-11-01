@@ -25,7 +25,8 @@ export async function contributionCounts(sql: Db, userId: string): Promise<{ sto
     SELECT count(DISTINCT r.story_id)::int AS stories,
            count(DISTINCT r.story_id) FILTER (WHERE s.created_by <> ${userId})::int AS others_stories
     FROM story_revisions r JOIN stories s ON s.id = r.story_id
-    WHERE r.author_id = ${userId} AND r.status = 'accepted' AND r.hidden_at IS NULL AND s.status = 'active'`;
+    WHERE r.author_id = ${userId} AND r.origin IN ('create', 'edit') AND r.status = 'accepted' AND r.hidden_at IS NULL
+      AND s.status = 'active'`;
   return row ?? { stories: 0, othersStories: 0 };
 }
 
@@ -64,7 +65,16 @@ export async function updateProfile(
  * but removes everything that identifies the person.
  */
 export async function deleteAccount(sql: Sql, userId: string): Promise<void> {
-  await sql.begin((tx) => anonymizeUser(tx, userId));
+  await sql.begin(async (tx) => {
+    // Nothing is left to decide about an account that no longer exists.
+    await tx`
+      UPDATE ban_requests SET resolved_by = ${userId}, resolved_at = now(), resolution = 'deleted'
+      WHERE user_id = ${userId} AND resolved_at IS NULL`;
+    await tx`
+      UPDATE reports SET resolved_by = ${userId}, resolved_at = now(), resolution = 'dismissed'
+      WHERE target_type = 'user' AND target_id = ${userId} AND resolved_at IS NULL`;
+    await anonymizeUser(tx, userId);
+  });
 }
 
 /** Removes what identifies someone and signs them out everywhere. Signing in again starts a new account. */
