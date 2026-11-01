@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router';
+import { Link, useLocation, useParams, useSearchParams } from 'react-router';
 import { formatCellLocation, isDisplayCell } from '@hexstory/shared';
 import { useCellStories } from '../api/queries';
 import { AdSlot } from '../components/AdSlot';
@@ -15,20 +15,23 @@ export function HexView() {
   const tab = params.get('tab') === 'square' ? 'square' : 'stories';
   const { setActiveCell, focusCells } = useMapState();
   const valid = isDisplayCell(cell);
+  // Arriving from the place search: always fly there, and name the place the hexagon was chosen for.
+  const arrival = useLocation().state as { focus?: boolean; placeName?: string } | null;
+  const forceFocus = !!arrival?.focus;
 
   useEffect(() => {
     if (!valid) return;
     setActiveCell(cell);
-    focusCells([cell], { onlyIfHidden: true });
+    focusCells([cell], { onlyIfHidden: !forceFocus });
     return () => setActiveCell(null);
-  }, [cell, valid, setActiveCell, focusCells]);
+  }, [cell, valid, forceFocus, setActiveCell, focusCells]);
 
   if (!valid) return <NotFound what="region" />;
 
   return (
     <Panel
       title="This region"
-      subtitle={formatCellLocation(cell)}
+      subtitle={arrival?.placeName ? `Around ${arrival.placeName} · ${formatCellLocation(cell)}` : formatCellLocation(cell)}
       footer={
         tab === 'stories' && (
           <Link className="button button-primary button-block" to={`/new?cell=${cell}`}>

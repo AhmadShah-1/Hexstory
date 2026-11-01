@@ -46,6 +46,8 @@ const schema = z
      */
     STRIPE_SUPPORT_URL: optional,
     PAYPAL_SUPPORT_URL: optional,
+    /** Photon geocoder the place search queries (server-side). Self-host or switch by changing it. */
+    GEOCODER_URL: z.preprocess((v) => (v === '' ? undefined : v), z.url().default('https://photon.komoot.io')),
     /**
      * Moderators' resource usage dashboard (docs/DEPLOYMENT.md, "Resource usage dashboard"). All
      * optional. Parsed and checked in usage/settings.ts: a bad value is reported on the dashboard

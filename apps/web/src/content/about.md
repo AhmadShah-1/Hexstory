@@ -8,6 +8,8 @@ with whoever else is looking at the same place right now.
 
 - **Stories** are short accounts of events, written by anyone. Each one names the regions it covers, when it
   happened, and at least one source. Stories are listed with the most recent events first.
+- **Search** for a town, city or country with the box at the top of the map: Hexstory flies there and opens
+  its hexagon (the smallest one for a town or city, a larger one for a region or country).
 - **The Square** is the live conversation for each hexagon. It's public, so be kind. New accounts can post
   after {{chatMinAccountMinutes}} minutes.
 - **Versions**: every edit is kept. Nothing is ever overwritten, and any change can be undone.

@@ -25,6 +25,7 @@ import { storyRoutes } from './routes/stories.js';
 import { supportRoutes } from './routes/support.js';
 import { uploadRoutes } from './routes/uploads.js';
 import { usageRoutes } from './routes/usage.js';
+import { placeRoutes } from './routes/places.js';
 import { userRoutes } from './routes/users.js';
 import type { Storage } from './storage/index.js';
 
@@ -152,6 +153,7 @@ export async function buildApp({
   await app.register(moderationRoutes(deps));
   await app.register(userRoutes(deps));
   await app.register(usageRoutes({ config, sql, coordinator }));
+  await app.register(placeRoutes({ config, coordinator }));
   await app.register(supportRoutes(deps));
   await app.register(settingsRoutes(deps));
 

@@ -1,6 +1,7 @@
 import { Link } from 'react-router';
 import { TRUST } from '@hexstory/shared';
 import { useSession } from '../api/queries';
+import { PlaceSearch } from '../components/PlaceSearch';
 import { SignInButton } from '../components/SignInPrompt';
 import { initials } from '../lib/format';
 
@@ -17,6 +18,7 @@ export function TopBar() {
         </svg>
         <span>Hexstory</span>
       </Link>
+      <PlaceSearch />
       <div className="account">
         {user ? (
           <>

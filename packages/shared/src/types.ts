@@ -316,3 +316,16 @@ export interface UploadedImage {
   imageUrl: string;
   thumbUrl: string;
 }
+
+/** A place found by the search box, already resolved to the one hexagon to open for it. */
+export interface Place {
+  name: string;
+  /** Where it is, e.g. "Hudson, New Jersey, United States". */
+  detail: string;
+  /** What it is, e.g. "City", "Country", "Lake". */
+  kind: string;
+  lat: number;
+  lng: number;
+  /** The display hexagon to open: the finest one for towns and cities, a larger one for regions and countries. */
+  cell: string;
+}

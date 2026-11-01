@@ -565,6 +565,7 @@ flags, which contain no secrets.
 | `GOOGLE_CLIENT_ID` | existing | you | no (public in the OAuth redirect) | Google OAuth client |
 | `GOOGLE_CLIENT_SECRET` | existing | you | **yes** | Google OAuth client secret |
 | `ADMIN_EMAILS` | existing | you | no (but private) | Comma-separated emails of Moderators (granted at sign-in; removal applies on their next request) |
+| `GEOCODER_URL` | new | optional | no | Place search geocoder (Photon). Default `https://photon.komoot.io`, komoot's free public instance (fair use, no key, no guarantee). Point it at your own Photon if traffic grows. Redeploy after changing |
 | `REDIS_URL` | new | Redis integration (check the name, §4) | **yes** | `redis://` or `rediss://` URL. Required on Vercel; optional locally |
 | `STORAGE_BACKEND` | new | defaults to `r2` on Vercel | no | `local` (default locally) or `r2` |
 | `R2_ENDPOINT` | new | you | no | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` |

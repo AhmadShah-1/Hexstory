@@ -149,6 +149,7 @@ in [DEPLOYMENT.md §7](DEPLOYMENT.md#7-environment-variable-reference). The impo
 | `APP_ORIGIN` | yes | Public origin, e.g. `https://hexstory.example`. Used for OAuth redirect and CSRF/WebSocket origin checks |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | for sign-in | Without them sign-in is disabled (read-only site) |
 | `ADMIN_EMAILS` | no | Comma-separated emails of Moderators (promoted at sign-in; removing an email revokes it on their next request) |
+| `GEOCODER_URL` | no | Photon geocoder for the place search (default `https://photon.komoot.io`; set your own instance for heavy use) |
 | `STORAGE_BACKEND` | no | `local` (default; `UPLOAD_DIR`) or `r2` (default and required on Vercel) |
 | `R2_ENDPOINT`, `R2_BUCKET`, `R2_STAGING_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_PUBLIC_BASE_URL` | with `r2` | See DEPLOYMENT.md §3 |
 | `REDIS_URL` | on Vercel | Shared chat fan-out, presence, cooldowns and rate limits. Optional locally |
@@ -512,6 +513,14 @@ failed. Two Redis connections per instance (commands + subscriber).
   in Redis for 15 min, refresh is limited to once a minute site-wide, providers are fetched independently with
   4 s timeouts, and the last good reading is kept and marked stale. Details: DEPLOYMENT.md "Resource usage
   dashboard" (`apps/api/src/usage/`).
+- **Place search** (`components/PlaceSearch.tsx`): a combobox in the top bar. Suggestions after 2 characters
+  (250 ms debounce); arrow keys move, Enter opens the highlighted (by default the top) result, Escape closes
+  then clears. Choosing a place opens `/h/<cell>` and always flies the map there, with "Around <place>" in
+  the panel subtitle. Exactly one hexagon per place: towns, cities and anything smaller → the finest display
+  hexagon (res 5); counties → res 4; states → res 3; countries → res 2; other features (lakes, parks) by the
+  size of their extent (`services/places.ts`). Lookups go through `GET /api/places` to a Photon geocoder
+  (`GEOCODER_URL`, default komoot's public instance, OpenStreetMap data): browsers never contact it, results
+  are cached in Redis for a day, and each address gets 60 searches a minute.
 - **Required legal text in the UI:** the Welcome checkbox, the disclaimer under every story, the licence
   notice in the editor, the "Messages are public. Be kind." chat placeholder, and About · Terms · Privacy links
   bottom-left.
@@ -520,7 +529,7 @@ failed. Two Redis connections per instance (commands + subscriber).
 
 | Path | View |
 |---|---|
-| `/` | Map only |
+| `/` | Map only (the place search box sits top-left; on phones, a bar under the top row) |
 | `/h/:cell` (`?tab=square`) | Hex panel: Stories / The Square |
 | `/s/:id` | Story |
 | `/s/:id/edit`, `/new?cell=` | Editor (lazy-loaded) |
@@ -575,6 +584,7 @@ All JSON. Errors are `{ error: code, message }`, and `message` is always safe to
 | `GET /api/moderation/usage` | moderator | Hosting usage per provider (`UsageReport`, `packages/shared/src/usage.ts`); readings cached ~15 min across instances |
 | `POST /api/moderation/usage/refresh` | moderator | Re-read every provider now; once a minute site-wide (429 + `Retry-After` otherwise) |
 | `GET /api/rules` | anyone | The rules in force (defaults + Moderator overrides) |
+| `GET /api/places?q=&lang=` | anyone | Place search → `[{ name, detail, kind, lat, lng, cell }]` (60/min/IP, cached a day) |
 | `GET`, `PUT /api/moderation/settings` | moderator | `{ rules: EditableRules, reason? }` |
 | Socket.IO `join` (acked), `leave`, `send` (ack `{ok, delayed?}`) → `message`, `presence`, `hidden`, `resync` | | The Square |
 
@@ -658,6 +668,10 @@ Designed so features can be added without touching unrelated code:
 
 ## Changelog
 
+- **2026-11-01**: Place search on the map: type a place, pick a suggestion (or press Enter for the top one),
+  and the map flies to its hexagon (finest for towns/cities, one larger hexagon for regions/countries).
+  `GET /api/places` proxies a Photon geocoder (`GEOCODER_URL`), cached and rate-limited. Privacy Policy and
+  About page mention it.
 - **2026-11-01**: Security and flow review fixes. Security: a malformed session cookie on a Socket.IO
   connection could crash the process (now parsed safely, setup errors contained); Socket.IO connection limits
   per address; chat sends gated before database work; newcomer drafts no longer become public when the story

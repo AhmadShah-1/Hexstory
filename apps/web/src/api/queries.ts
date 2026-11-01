@@ -12,6 +12,7 @@ import type {
   EditStoryInput,
   ModUserRow,
   Page,
+  Place,
   ReportReason,
   ReportTarget,
   RevisionListItem,
@@ -352,6 +353,27 @@ export function useUpdateModSettings() {
     },
   });
 }
+
+// ---- Place search ----
+
+const PLACE_LANGUAGES = ['en', 'de', 'fr', 'it'];
+const placeLanguage = () => {
+  const lang = navigator.language?.slice(0, 2).toLowerCase();
+  return lang && PLACE_LANGUAGES.includes(lang) ? lang : 'en';
+};
+
+/** Places matching what's typed in the map's search box (2+ characters), each with the hexagon to open. */
+export const usePlaces = (query: string) => {
+  const q = query.trim();
+  return useQuery({
+    queryKey: ['places', q.toLowerCase()],
+    queryFn: () => api<Place[]>(`/api/places?${queryString({ q, lang: placeLanguage() })}`),
+    enabled: q.length >= 2,
+    staleTime: 60 * 60_000,
+    retry: false,
+    placeholderData: (prev) => prev,
+  });
+};
 
 // ---- Your account ----
 
