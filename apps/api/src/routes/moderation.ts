@@ -7,7 +7,6 @@ import { canReview } from '../policy.js';
 import { createReport, openReports, resolveReport } from '../services/reports.js';
 import { hideMessage } from '../services/square.js';
 import { pendingForReview, unreviewedStories } from '../services/stories.js';
-import { setBanned } from '../services/users.js';
 import type { Deps } from './deps.js';
 
 const idParams = z.object({ id: z.uuid() });
@@ -51,14 +50,6 @@ export const moderationRoutes =
       // The database is authoritative: if the live relay fails, clients drop the message when they
       // next refetch history (on reconnect or resync).
       await square.messageHidden(cell, id).catch((err) => req.log.error({ err }, 'square: hide relay failed'));
-      return { ok: true };
-    });
-
-    app.post('/api/users/:id/ban', async (req) => {
-      const user = requireWriter(req);
-      const { id } = parse(idParams, req.params);
-      const body = parse(z.object({ banned: z.boolean(), reason }), req.body);
-      await setBanned(sql, user, id, body.banned, body.reason ?? null);
       return { ok: true };
     });
   };

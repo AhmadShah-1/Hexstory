@@ -22,7 +22,7 @@ export const cellRoutes =
     app.get('/api/cells/:cell/stories', async (req) => {
       const { cell } = parse(cellParams, req.params);
       const { offset } = parse(z.object({ offset: z.coerce.number().int().min(0).max(10_000).default(0) }), req.query);
-      return listStoriesInCell(deps, cell, offset);
+      return listStoriesInCell(deps, cell, offset, req.user);
     });
 
     app.get('/api/cells/:cell/messages', async (req) => {

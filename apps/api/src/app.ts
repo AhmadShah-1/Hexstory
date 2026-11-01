@@ -6,6 +6,7 @@ import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import Fastify, { type FastifyError } from 'fastify';
+import { TRUST } from '@hexstory/shared';
 import { googleAuthRoutes } from './auth/google.js';
 import { SESSION_COOKIE, getSessionUser } from './auth/sessions.js';
 import type { Config } from './config.js';
@@ -21,6 +22,7 @@ import { moderationRoutes } from './routes/moderation.js';
 import { sessionRoutes } from './routes/session.js';
 import { storyRoutes } from './routes/stories.js';
 import { uploadRoutes } from './routes/uploads.js';
+import { userRoutes } from './routes/users.js';
 import type { Storage } from './storage/index.js';
 
 /** Third-party origins the browser may contact. Keep in sync with VITE_MAP_STYLE_URL in apps/web. */
@@ -98,7 +100,13 @@ export async function buildApp({
     if (!SAFE_METHODS.has(req.method) && req.headers.origin !== config.APP_ORIGIN) {
       throw forbidden('Cross-site request blocked.', 'bad-origin');
     }
-    req.user = await getSessionUser(sql, req.cookies[SESSION_COOKIE]);
+    const user = await getSessionUser(sql, req.cookies[SESSION_COOKIE]);
+    // Moderator access follows ADMIN_EMAILS: taking someone off the list takes effect on their next
+    // request, not only at their next sign-in (which also stores the lower level).
+    if (user && user.trustLevel >= TRUST.MODERATOR && !config.ADMIN_EMAILS.includes(user.email ?? '')) {
+      user.trustLevel = TRUST.REVIEWER;
+    }
+    req.user = user;
   });
 
   app.setErrorHandler((err: FastifyError, req, reply) => {
@@ -126,6 +134,7 @@ export async function buildApp({
   await app.register(storyRoutes(deps));
   await app.register(uploadRoutes(deps));
   await app.register(moderationRoutes(deps));
+  await app.register(userRoutes(deps));
 
   // In production the API also serves the built web app; in development Vite does.
   const serveWeb = config.NODE_ENV === 'production' && existsSync(webRoot);

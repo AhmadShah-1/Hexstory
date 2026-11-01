@@ -1,37 +1,28 @@
-import { TRUST, type TrustLevel } from '@hexstory/shared';
+import { RULES, TRUST, type TrustLevel } from '@hexstory/shared';
 
 /**
- * Anti-abuse policy in one place. Tune numbers here; the reasoning lives in docs/DESIGN.md.
+ * Anti-abuse policy in one place. Tune numbers here, or in `RULES` (packages/shared/src/rules.ts) for
+ * the ones shown to users on the About page; the reasoning lives in docs/DESIGN.md.
  */
 export const POLICY = {
   sessionDays: 30,
-  /** Stories a user can create per 24h, by trust level. */
-  storiesPerDay: { 0: 3, 1: 20, 2: 100, 3: 1000 } satisfies Record<TrustLevel, number>,
-  /** Revisions (edits) a user can submit per 24h, by trust level. */
-  editsPerDay: { 0: 10, 1: 60, 2: 300, 3: 5000 } satisfies Record<TrustLevel, number>,
+  storiesPerDay: RULES.storiesPerDay,
+  editsPerDay: RULES.editsPerDay,
   /** API requests per client IP per minute, across all instances. */
   requestsPerMinute: 300,
   /** Upload slots a user can request per hour (completing allows twice this, for retries). */
   uploadsPerHour: 20,
-  reportsPerDay: 30,
+  reportsPerDay: RULES.reportsPerDay,
   /** Socket.IO events (join/leave/send) one connection may emit per 10 seconds before being dropped. */
   socketEventsPer10s: 30,
   /** Minimum gap between chat messages from one user. */
   chatIntervalMs: 2_000,
-  /** Accounts younger than this can read the Square but not post. */
-  chatMinAccountAgeMs: 10 * 60 * 1000,
-  /** An edit removing more than this share of the body is held for review. */
-  largeRemovalRatio: 0.6,
-  /** Newcomer edits with more links than this are held for review. */
-  newcomerMaxLinks: 2,
-  /**
-   * Automatic promotion, counted in distinct stories with an accepted contribution.
-   * Reviewers must also have improved stories other people started, which can't be self-farmed.
-   */
-  promotion: {
-    member: { minAgeDays: 3, minStories: 3 },
-    reviewer: { minAgeDays: 30, minStories: 25, minOthersStories: 15 },
-  },
+  chatMinAccountAgeMs: RULES.chatMinAccountMinutes * 60 * 1000,
+  largeRemovalRatio: RULES.largeRemovalPercent / 100,
+  newcomerMaxLinks: RULES.newcomerMaxLinks,
+  promotion: RULES.promotion,
+  /** Chat messages from the last this-many hours are removed live from open Squares when their author is banned. */
+  banLiveHideHours: 24,
 } as const;
 
 export interface Actor {
@@ -60,6 +51,13 @@ export function detectFlags(params: { previousBody: string | null; body: string;
   const links = params.links + (body.match(/https?:\/\//g)?.length ?? 0);
   if (trustLevel < TRUST.MEMBER && links > POLICY.newcomerMaxLinks) flags.push('many-links');
   return flags;
+}
+
+/** The next level someone can earn automatically, or null. */
+export function nextEarnedLevel(current: number): TrustLevel | null {
+  if (current < TRUST.MEMBER) return TRUST.MEMBER;
+  if (current < TRUST.REVIEWER) return TRUST.REVIEWER;
+  return null;
 }
 
 /** Trust level earned automatically from history. Never demotes; moderators are set by ADMIN_EMAILS. */

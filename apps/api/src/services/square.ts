@@ -4,6 +4,7 @@ import type { Sql } from '../db.js';
 import { forbidden, notFound } from '../errors.js';
 import { POLICY, canReview } from '../policy.js';
 import { logModAction } from './modlog.js';
+import { closeReportsAbout } from './stories.js';
 
 export async function recentMessages(sql: Sql, cell: string, limit = 50): Promise<ChatMessage[]> {
   const rows = await sql<{ id: string; cell: string; userId: string; displayName: string; body: string; createdAt: Date }[]>`
@@ -51,6 +52,7 @@ export async function hideMessage(sql: Sql, user: SessionUser, id: string, reaso
     const [row] = await tx<{ cell: string }[]>`
       UPDATE comments SET hidden_at = now() WHERE id = ${id} AND hidden_at IS NULL RETURNING cell`;
     if (!row) throw notFound('Message');
+    await closeReportsAbout(tx, user.id, 'comment', [id]);
     await logModAction(tx, user.id, 'hide', 'comment', id, reason);
     return row;
   });

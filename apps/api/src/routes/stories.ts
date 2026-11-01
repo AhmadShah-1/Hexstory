@@ -11,6 +11,7 @@ import {
   restoreRevision,
   reviewRevision,
   setProtection,
+  setRevisionRemoved,
   setStoryStatus,
 } from '../services/stories.js';
 import type { Deps } from './deps.js';
@@ -58,6 +59,14 @@ export const storyRoutes =
       return { ok: true };
     });
 
+    app.post('/api/revisions/:id/removed', async (req) => {
+      const user = requireWriter(req);
+      const { id } = parse(idParams, req.params);
+      const body = parse(z.object({ removed: z.boolean(), reason }), req.body);
+      await setRevisionRemoved(sql, user, id, body.removed, body.reason ?? null);
+      return { ok: true };
+    });
+
     app.post('/api/stories/:id/restore', async (req) => {
       const user = requireWriter(req);
       const { id } = parse(idParams, req.params);
@@ -68,8 +77,8 @@ export const storyRoutes =
     app.post('/api/stories/:id/status', async (req) => {
       const user = requireWriter(req);
       const { id } = parse(idParams, req.params);
-      const body = parse(z.object({ status: z.enum(['active', 'hidden']), reason }), req.body);
-      await setStoryStatus(sql, user, id, body.status, body.reason ?? null);
+      const body = parse(z.object({ status: z.enum(['active', 'hidden']), reason, revisionId: z.uuid().nullish() }), req.body);
+      await setStoryStatus(sql, user, id, body.status, body.reason ?? null, body.revisionId);
       return { ok: true };
     });
 

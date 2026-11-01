@@ -16,7 +16,8 @@ export function StoryContent({ revision, cellCount }: { revision: StoryRevision;
       </div>
       <RichContent doc={revision.content} />
       <p className="byline muted small">
-        Last edited by {revision.author.displayName} · {new Date(revision.createdAt).toLocaleDateString()}
+        Last edited by <Link to={`/u/${revision.author.id}`}>{revision.author.displayName}</Link> ·{' '}
+        {new Date(revision.createdAt).toLocaleDateString()}
       </p>
 
       <h3 className="section-label">Sources</h3>

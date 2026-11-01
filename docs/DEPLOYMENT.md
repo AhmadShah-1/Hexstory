@@ -326,7 +326,7 @@ flags, which contain no secrets.
 | `APP_ORIGIN` | existing | you | no | Canonical public origin, e.g. `https://hexstory.example` |
 | `GOOGLE_CLIENT_ID` | existing | you | no (public in the OAuth redirect) | Google OAuth client |
 | `GOOGLE_CLIENT_SECRET` | existing | you | **yes** | Google OAuth client secret |
-| `ADMIN_EMAILS` | existing | you | no (but private) | Comma-separated emails that become Moderators at sign-in |
+| `ADMIN_EMAILS` | existing | you | no (but private) | Comma-separated emails of Moderators (granted at sign-in; removal applies on their next request) |
 | `REDIS_URL` | new | Redis integration (check the name, §4) | **yes** | `redis://` or `rediss://` URL. Required on Vercel; optional locally |
 | `STORAGE_BACKEND` | new | defaults to `r2` on Vercel | no | `local` (default locally) or `r2` |
 | `R2_ENDPOINT` | new | you | no | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` |
@@ -414,6 +414,12 @@ Use two different browsers (or one normal and one private window) signed in as t
       meanwhile, then go back *Online*. The missed message appears once.
 - [ ] **Moderation:** with a Reviewer/Moderator account (`ADMIN_EMAILS`), hide a message. It disappears in
       the other browser.
+- [ ] **New stories wait for approval:** with a fresh (Newcomer) account, write a story. Signed out, it isn't
+      listed or reachable; the Moderator account sees it in Watchtower → New stories and approves it, after
+      which it is public.
+- [ ] **Moderation screen:** as the Moderator, open Moderation: the Users tab lists both accounts, and the
+      Audit log shows the approval and the hidden message. Ban a throwaway account with "Remove posts" and
+      check its stories are gone; then unban it.
 - [ ] **Rate limits:** send two chat messages within 2 s: "Slow down a little." Request 21 upload slots
       within an hour (or temporarily lower `POLICY.uploadsPerHour`) to get HTTP 429.
 - [ ] **Persistence:** redeploy (Deployments → Redeploy). Stories, images, chat history and your session

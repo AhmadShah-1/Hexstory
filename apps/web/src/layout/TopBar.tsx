@@ -1,15 +1,12 @@
-import { useState } from 'react';
 import { Link } from 'react-router';
 import { TRUST } from '@hexstory/shared';
 import { useSession } from '../api/queries';
 import { SignInButton } from '../components/SignInPrompt';
 import { initials } from '../lib/format';
-import { AccountDialog } from '../views/AccountDialog';
 
 export function TopBar() {
   const session = useSession();
   const user = session.data?.user;
-  const [accountOpen, setAccountOpen] = useState(false);
 
   return (
     <>
@@ -23,14 +20,15 @@ export function TopBar() {
       <div className="account">
         {user ? (
           <>
+            {user.trustLevel >= TRUST.MODERATOR && (
+              <Link to="/moderation" className="button button-floating">Moderation</Link>
+            )}
             {user.trustLevel >= TRUST.REVIEWER && (
               <Link to="/watchtower" className="button button-floating">Watchtower</Link>
             )}
-            <button className="avatar avatar-button" onClick={() => setAccountOpen(true)} aria-label="Your account" title={user.displayName}>
+            <Link to="/me" className="avatar avatar-button" aria-label="Your account" title={user.displayName}>
               {initials(user.displayName)}
-            </button>
-            {/* Mounted only while open so it always starts from the current name. */}
-            {accountOpen && <AccountDialog open onClose={() => setAccountOpen(false)} />}
+            </Link>
           </>
         ) : (
           session.data && <SignInButton label="Sign in" className="button button-floating" />

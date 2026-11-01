@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   LIMITS,
+  TRUST,
   createStorySchema,
   isDisplayCell,
   toBaseCells,
@@ -10,6 +11,7 @@ import {
   type DateParts,
   type RichDoc,
   type StoryDetail,
+  type WriteResult,
 } from '@hexstory/shared';
 import { errorMessage } from '../api/client';
 import { useCreateStory, useEditStory, useSession, useStory } from '../api/queries';
@@ -99,6 +101,16 @@ function EditorForm({ story }: { story: StoryDetail | undefined }) {
   const [draft, setDraft] = useState<Draft>(() => initialDraft(story));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const startCell = params.get('cell');
+  const level = useSession().data?.user?.trustLevel ?? TRUST.NEW;
+  const goLiveHint = !story
+    ? level >= TRUST.MEMBER
+      ? 'Your story goes live as soon as you publish it.'
+      : 'New stories stay private until a reviewer approves them. You can keep editing yours meanwhile.'
+    : !story.can.editGoesLive
+      ? 'Your edit will be reviewed before it appears.'
+      : story.status === 'unreviewed'
+        ? "Your changes are saved straight away. The story stays private until a reviewer approves it."
+        : 'Your changes go live as soon as you save them.';
 
   // Enter region-picking mode with the starting selection, and leave it cleanly.
   const { setMode, setSelection, focusCells } = map;
@@ -149,14 +161,20 @@ function EditorForm({ story }: { story: StoryDetail | undefined }) {
       return;
     }
     setErrors({});
-    const onSuccess = (res: { storyId: string; status: 'live' | 'pending' }) => {
-      if (res.status === 'live') {
-        toast(story ? 'Saved' : 'Published. Thank you!');
-        navigate(`/s/${res.storyId}`);
+    const onSuccess = (res: WriteResult) => {
+      if (res.status === 'pending') {
+        toast(story
+          ? 'Thanks! Your edit will appear once a reviewer accepts it.'
+          : 'Thanks! A reviewer will check your story before it is published. Until then only you and reviewers can see it.');
+      } else if (res.storyStatus === 'unreviewed') {
+        toast(story
+          ? "Saved. Your story is still waiting for a reviewer's approval."
+          : 'Saved. Your story will be published once a reviewer approves it. Until then only you and reviewers can see it.');
       } else {
-        toast(story ? 'Thanks! Your edit will appear once a reviewer accepts it.' : 'Thanks! Your story will appear after a quick review.');
-        navigate(story ? `/s/${res.storyId}` : startCell ? `/h/${startCell}` : '/');
+        toast(story ? 'Saved' : 'Published. Thank you!');
       }
+      // The author can always see their own story, even before it's public.
+      navigate(`/s/${res.storyId}`);
     };
     if (story) {
       edit.mutate({ ...parsed.data, baseRevisionId: story.revision.id, editSummary: draft.editSummary || null }, { onSuccess });
@@ -175,8 +193,8 @@ function EditorForm({ story }: { story: StoryDetail | undefined }) {
         <div className="publish">
           <p className="muted small">
             By publishing you license your text under CC BY-SA 4.0 and confirm you have the right to share any image.
-            {story && !story.can.editGoesLive && ' Your edit will be reviewed before it appears.'}
           </p>
+          <p className="small publish-hint">{goLiveHint}</p>
           {mutation.error && <p className="error-text">{errorMessage(mutation.error)}</p>}
           {Object.keys(errors).length > 0 && <p className="error-text">Please fix the highlighted fields.</p>}
           <button className="button button-primary button-block" form="story-form" disabled={mutation.isPending}>

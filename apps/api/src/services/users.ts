@@ -1,9 +1,8 @@
 import { TRUST, type Me } from '@hexstory/shared';
 import type { SessionUser } from '../auth/sessions.js';
-import type { Sql } from '../db.js';
-import { conflict, forbidden, notFound } from '../errors.js';
+import type { Db, Sql } from '../db.js';
+import { conflict } from '../errors.js';
 import { earnedTrustLevel } from '../policy.js';
-import { logModAction } from './modlog.js';
 
 export function toMe(user: SessionUser): Me {
   return {
@@ -15,20 +14,30 @@ export function toMe(user: SessionUser): Me {
   };
 }
 
-/** Recomputes the automatically earned trust level after activity. */
+/**
+ * What counts toward promotion: distinct *published* stories with an accepted, not-removed version by
+ * this user, and how many of those someone else started. Counting stories rather than versions means
+ * repeatedly editing one story can't farm trust.
+ */
+export async function contributionCounts(sql: Db, userId: string): Promise<{ stories: number; othersStories: number }> {
+  const [row] = await sql<{ stories: number; othersStories: number }[]>`
+    SELECT count(DISTINCT r.story_id)::int AS stories,
+           count(DISTINCT r.story_id) FILTER (WHERE s.created_by <> ${userId})::int AS others_stories
+    FROM story_revisions r JOIN stories s ON s.id = r.story_id
+    WHERE r.author_id = ${userId} AND r.status = 'accepted' AND r.hidden_at IS NULL AND s.status = 'active'`;
+  return row ?? { stories: 0, othersStories: 0 };
+}
+
+/** Recomputes the automatically earned trust level after activity. Leaves levels a moderator set alone. */
 export async function refreshTrust(sql: Sql, userId: string): Promise<void> {
-  // Count distinct stories, not revisions, so repeatedly editing one's own story can't farm trust.
-  const [row] = await sql<{ trustLevel: number; createdAt: Date; stories: number; othersStories: number }[]>`
-    SELECT u.trust_level, u.created_at,
-           (SELECT count(DISTINCT r.story_id)::int FROM story_revisions r
-             WHERE r.author_id = u.id AND r.status = 'accepted') AS stories,
-           (SELECT count(DISTINCT r.story_id)::int FROM story_revisions r JOIN stories s ON s.id = r.story_id
-             WHERE r.author_id = u.id AND r.status = 'accepted' AND s.created_by <> u.id) AS others_stories
-    FROM users u WHERE u.id = ${userId}`;
-  if (!row || row.trustLevel >= TRUST.MODERATOR) return;
+  const [row] = await sql<{ trustLevel: number; trustLocked: boolean; createdAt: Date }[]>`
+    SELECT trust_level, trust_locked, created_at FROM users WHERE id = ${userId}`;
+  if (!row || row.trustLocked || row.trustLevel >= TRUST.MODERATOR) return;
   const ageDays = (Date.now() - row.createdAt.getTime()) / 86_400_000;
-  const level = earnedTrustLevel(row.trustLevel, ageDays, { stories: row.stories, othersStories: row.othersStories });
-  if (level !== row.trustLevel) await sql`UPDATE users SET trust_level = ${level} WHERE id = ${userId}`;
+  const level = earnedTrustLevel(row.trustLevel, ageDays, await contributionCounts(sql, userId));
+  if (level !== row.trustLevel) {
+    await sql`UPDATE users SET trust_level = ${level} WHERE id = ${userId} AND NOT trust_locked`;
+  }
 }
 
 export async function updateProfile(
@@ -54,24 +63,14 @@ export async function updateProfile(
  * but removes everything that identifies the person.
  */
 export async function deleteAccount(sql: Sql, userId: string): Promise<void> {
-  await sql.begin(async (tx) => {
-    await tx`
-      UPDATE users SET deleted_at = now(), email = NULL, display_name = 'Deleted user',
-        google_sub = 'deleted:' || id::text
-      WHERE id = ${userId}`;
-    await tx`DELETE FROM sessions WHERE user_id = ${userId}`;
-  });
+  await sql.begin((tx) => anonymizeUser(tx, userId));
 }
 
-export async function setBanned(sql: Sql, actor: SessionUser, userId: string, banned: boolean, reason: string | null) {
-  if (actor.trustLevel < TRUST.MODERATOR) throw forbidden();
-  if (actor.id === userId) throw forbidden('You cannot ban yourself.');
-  const [target] = await sql<{ trustLevel: number }[]>`SELECT trust_level AS "trustLevel" FROM users WHERE id = ${userId}`;
-  if (!target) throw notFound('User');
-  if (target.trustLevel >= TRUST.MODERATOR) throw forbidden('Moderators cannot ban other moderators.');
-  await sql.begin(async (tx) => {
-    await tx`UPDATE users SET banned_at = ${banned ? new Date() : null} WHERE id = ${userId}`;
-    if (banned) await tx`DELETE FROM sessions WHERE user_id = ${userId}`;
-    await logModAction(tx, actor.id, banned ? 'ban' : 'unban', 'user', userId, reason);
-  });
+/** Removes what identifies someone and signs them out everywhere. Signing in again starts a new account. */
+export async function anonymizeUser(tx: Db, userId: string): Promise<void> {
+  await tx`
+    UPDATE users SET deleted_at = now(), email = NULL, display_name = 'Deleted user',
+      google_sub = 'deleted:' || id::text
+    WHERE id = ${userId}`;
+  await tx`DELETE FROM sessions WHERE user_id = ${userId}`;
 }

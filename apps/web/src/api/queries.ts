@@ -1,9 +1,16 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  AuditEntry,
+  BanRequestGroup,
   CellCount,
   ChatMessage,
+  CleanupSummary,
+  ContributionEdit,
+  ContributionStory,
   CreateStoryInput,
   EditStoryInput,
+  ModUserRow,
+  Page,
   ReportReason,
   ReportTarget,
   RevisionListItem,
@@ -13,7 +20,9 @@ import type {
   StorySummary,
   UploadTicket,
   UploadedImage,
+  UserProfile,
   WatchtowerData,
+  WriteResult,
 } from '@hexstory/shared';
 import { ApiError, api } from './client';
 
@@ -27,7 +36,22 @@ export const keys = {
   revision: (id: string) => ['revision', id] as const,
   messages: (cell: string) => ['messages', cell] as const,
   watchtower: ['watchtower'] as const,
+  user: (id: string) => ['user', id] as const,
+  userStories: (id: string) => ['user-stories', id] as const,
+  userRevisions: (id: string) => ['user-revisions', id] as const,
+  modUsers: (filters: ModUserFilters) => ['mod-users', filters] as const,
+  banRequests: ['ban-requests'] as const,
+  auditLog: (filters: AuditFilters) => ['audit-log', filters] as const,
 };
+
+export type ModUserFilters = { q?: string; level?: 0 | 1 | 2 | 3; filter?: 'all' | 'banned' | 'requested' | 'reported' };
+export type AuditFilters = { actorId?: string; targetType?: 'story' | 'revision' | 'comment' | 'user' | 'report'; targetId?: string; action?: string };
+
+/** `?a=1&b=x` from the defined values only. */
+function queryString(params: Record<string, string | number | undefined>): string {
+  const entries = Object.entries(params).filter((e): e is [string, string | number] => e[1] !== undefined && e[1] !== '');
+  return new URLSearchParams(entries.map(([k, v]) => [k, String(v)])).toString();
+}
 
 export const useSession = () =>
   useQuery({ queryKey: keys.session, queryFn: () => api<SessionInfo>('/api/session'), staleTime: 60_000 });
@@ -69,8 +93,6 @@ export const useMessages = (cell: string) =>
 export const useWatchtower = (enabled: boolean) =>
   useQuery({ queryKey: keys.watchtower, queryFn: () => api<WatchtowerData>('/api/watchtower'), enabled });
 
-type WriteResult = { storyId: string; revisionId: string; status: 'live' | 'pending' };
-
 /** After any write that can change what the map shows, refresh map + lists + the story itself. */
 function useInvalidateStories() {
   const qc = useQueryClient();
@@ -78,6 +100,10 @@ function useInvalidateStories() {
     qc.invalidateQueries({ queryKey: ['cells'] });
     qc.invalidateQueries({ queryKey: ['cell-stories'] });
     qc.invalidateQueries({ queryKey: keys.watchtower });
+    qc.invalidateQueries({ queryKey: ['user-stories'] });
+    qc.invalidateQueries({ queryKey: ['user-revisions'] });
+    qc.invalidateQueries({ queryKey: ['user'] });
+    qc.invalidateQueries({ queryKey: ['audit-log'] });
     if (storyId) {
       qc.invalidateQueries({ queryKey: keys.story(storyId) });
       qc.invalidateQueries({ queryKey: keys.revisions(storyId) });
@@ -118,11 +144,30 @@ export function useRestoreRevision(storyId: string) {
   });
 }
 
+/**
+ * Approve (status 'active' on a story waiting for review: pass the `revisionId` you showed the reviewer,
+ * so approval fails if the author changed it since), hide, or (moderators) unhide a story.
+ */
 export function useSetStoryStatus(storyId: string) {
   const invalidate = useInvalidateStories();
   return useMutation({
-    mutationFn: (status: 'active' | 'hidden') => api(`/api/stories/${storyId}/status`, { method: 'POST', body: { status } }),
+    mutationFn: (input: { status: 'active' | 'hidden'; revisionId?: string; reason?: string }) =>
+      api(`/api/stories/${storyId}/status`, { method: 'POST', body: input }),
     onSuccess: () => invalidate(storyId),
+  });
+}
+
+/** Remove a version from the history (reviewers), or put it back (moderators). Not allowed on the current version. */
+export function useSetRevisionRemoved(storyId: string) {
+  const invalidate = useInvalidateStories();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ revisionId, removed, reason }: { revisionId: string; removed: boolean; reason?: string }) =>
+      api(`/api/revisions/${revisionId}/removed`, { method: 'POST', body: { removed, reason } }),
+    onSuccess: (_res, { revisionId }) => {
+      invalidate(storyId);
+      qc.invalidateQueries({ queryKey: keys.revision(revisionId) });
+    },
   });
 }
 
@@ -158,11 +203,123 @@ export function useHideMessage() {
   });
 }
 
+// ---- User pages & contributions ----
+
+export const useUserProfile = (id: string | undefined) =>
+  useQuery({ queryKey: keys.user(id ?? ''), queryFn: () => api<UserProfile>(`/api/users/${id}`), enabled: !!id });
+
+/** Stories someone started. Only works for the user themself and reviewers. */
+export const useUserStories = (id: string, enabled = true) =>
+  useInfiniteQuery({
+    queryKey: keys.userStories(id),
+    queryFn: ({ pageParam }) => api<Page<ContributionStory>>(`/api/users/${id}/stories?offset=${pageParam}`),
+    initialPageParam: 0,
+    getNextPageParam: (last) => last.nextOffset,
+    enabled,
+  });
+
+/** Every version someone wrote. Only works for the user themself and reviewers. */
+export const useUserRevisions = (id: string, enabled = true) =>
+  useInfiniteQuery({
+    queryKey: keys.userRevisions(id),
+    queryFn: ({ pageParam }) => api<Page<ContributionEdit>>(`/api/users/${id}/revisions?offset=${pageParam}`),
+    initialPageParam: 0,
+    getNextPageParam: (last) => last.nextOffset,
+    enabled,
+  });
+
+// ---- Moderation (moderators, except requesting a ban: reviewers) ----
+
+export const useModUsers = (filters: ModUserFilters, enabled = true) =>
+  useInfiniteQuery({
+    queryKey: keys.modUsers(filters),
+    queryFn: ({ pageParam }) =>
+      api<Page<ModUserRow>>(`/api/moderation/users?${queryString({ ...filters, offset: pageParam })}`),
+    initialPageParam: 0,
+    getNextPageParam: (last) => last.nextOffset,
+    enabled,
+    placeholderData: (prev) => prev,
+  });
+
+export const useBanRequests = (enabled = true) =>
+  useQuery({ queryKey: keys.banRequests, queryFn: () => api<BanRequestGroup[]>('/api/moderation/ban-requests'), enabled });
+
+export const useAuditLog = (filters: AuditFilters, enabled = true) =>
+  useInfiniteQuery({
+    queryKey: keys.auditLog(filters),
+    queryFn: ({ pageParam }) => api<Page<AuditEntry>>(`/api/moderation/log?${queryString({ ...filters, offset: pageParam })}`),
+    initialPageParam: 0,
+    getNextPageParam: (last) => last.nextOffset,
+    enabled,
+  });
+
+/** Everything a moderation action can change: the person, the queues, the log, and (after a clean-up) stories. */
+function useInvalidateModeration() {
+  const qc = useQueryClient();
+  const invalidateStories = useInvalidateStories();
+  return () => {
+    for (const key of ['user', 'mod-users', 'ban-requests', 'audit-log', 'messages']) qc.invalidateQueries({ queryKey: [key] });
+    qc.invalidateQueries({ queryKey: ['story'] });
+    invalidateStories();
+  };
+}
+
+export function useRequestBan(userId: string) {
+  const invalidate = useInvalidateModeration();
+  return useMutation({
+    mutationFn: (reason: string) => api(`/api/users/${userId}/ban-requests`, { method: 'POST', body: { reason } }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeclineBanRequests(userId: string) {
+  const invalidate = useInvalidateModeration();
+  return useMutation({
+    mutationFn: (reason?: string) => api(`/api/users/${userId}/ban-requests/decline`, { method: 'POST', body: { reason } }),
+    onSuccess: invalidate,
+  });
+}
+
+/** Ban (optionally taking down everything they contributed) or unban. */
+export function useBanUser(userId: string) {
+  const invalidate = useInvalidateModeration();
+  return useMutation({
+    mutationFn: (input: { banned: boolean; reason?: string; removeContent?: boolean }) =>
+      api<{ ok: true; cleanup: CleanupSummary | null }>(`/api/users/${userId}/ban`, { method: 'POST', body: input }),
+    onSuccess: invalidate,
+  });
+}
+
+/** Delete (anonymise) an account, optionally taking down everything they contributed. */
+export function useDeleteUser(userId: string) {
+  const invalidate = useInvalidateModeration();
+  return useMutation({
+    mutationFn: (input: { reason?: string; removeContent: boolean }) =>
+      api<{ ok: true; cleanup: CleanupSummary | null }>(`/api/users/${userId}/delete`, { method: 'POST', body: input }),
+    onSuccess: invalidate,
+  });
+}
+
+/** Set a level by hand (0–2; pauses automatic promotion) or hand it back to the automatic rules. */
+export function useSetTrust(userId: string) {
+  const invalidate = useInvalidateModeration();
+  return useMutation({
+    mutationFn: (input: { level: 0 | 1 | 2 | 'auto'; reason?: string }) =>
+      api(`/api/users/${userId}/trust`, { method: 'POST', body: input }),
+    onSuccess: invalidate,
+  });
+}
+
+// ---- Your account ----
+
 export function useUpdateProfile() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: { displayName?: string; acceptTerms?: true }) => api('/api/me', { method: 'PATCH', body: input }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: keys.session }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: keys.session });
+      qc.invalidateQueries({ queryKey: ['user'] });
+    },
   });
 }
 

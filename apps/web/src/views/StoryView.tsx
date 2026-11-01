@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router';
 import { TRUST } from '@hexstory/shared';
-import { errorMessage } from '../api/client';
+import { ApiError, errorMessage } from '../api/client';
 import { signInUrl, useSession, useSetProtection, useSetStoryStatus, useStory } from '../api/queries';
 import { AdSlot } from '../components/AdSlot';
 import { Panel } from '../components/Panel';
@@ -31,8 +31,11 @@ export function StoryView() {
 
   if (story.isLoading) return <Panel title="Loading…"><p className="muted pad">Loading story…</p></Panel>;
   if (!story.data) return <NotFound what="story" />;
-  const { revision, can, pendingCount, status } = story.data;
-  const signedIn = !!session.data?.user;
+  const { revision, can, pendingCount, status, createdBy } = story.data;
+  const viewer = session.data?.user;
+  const signedIn = !!viewer;
+  // Not public yet: a newcomer's story awaiting approval, or a story whose first version is held.
+  const waiting = status === 'unreviewed' || revision.status === 'pending';
 
   const share = async () => {
     const url = `${window.location.origin}/s/${id}`;
@@ -48,9 +51,17 @@ export function StoryView() {
     <Panel
       title="Story"
       back={fromCell ? { label: 'Stories in this region', to: `/h/${fromCell}` } : undefined}
-      subtitle={status === 'hidden' ? 'Hidden from the public' : status === 'unreviewed' ? 'New, not yet looked at by a reviewer' : undefined}
+      subtitle={status === 'hidden' ? 'Hidden from the public' : waiting
+        ? `Waiting for a reviewer · ${viewer?.id === createdBy.id ? 'only you and reviewers can see it' : 'not public yet'}`
+        : undefined}
     >
       <div className="pad">
+        {waiting && viewer?.id === createdBy.id && (
+          <p className="notice">
+            Your story will be published once a reviewer approves it.
+            {status === 'unreviewed' && revision.status !== 'pending' && ' You can keep editing it until then.'}
+          </p>
+        )}
         {pendingCount > 0 &&
           (can.review ? (
             <Link to={`/s/${id}/versions`} className="notice">
@@ -74,7 +85,18 @@ export function StoryView() {
           {signedIn && <button className="button button-quiet" onClick={() => setReporting(true)}>Report</button>}
         </div>
 
-        {can.review && <ReviewerTools storyId={id} status={status} protectionLevel={story.data.protectionLevel} isModerator={(session.data?.user?.trustLevel ?? 0) >= TRUST.MODERATOR} />}
+        {can.review && (
+          <ReviewerTools
+            storyId={id}
+            revisionId={revision.id}
+            status={status}
+            createdBy={createdBy}
+            isOwn={viewer?.id === createdBy.id}
+            protectionLevel={story.data.protectionLevel}
+            isModerator={(viewer?.trustLevel ?? 0) >= TRUST.MODERATOR}
+            onStale={() => story.refetch()}
+          />
+        )}
         <AdSlot placement="story-end" />
       </div>
       {reporting && <ReportDialog open onClose={() => setReporting(false)} targetType="story" targetId={id} />}
@@ -82,26 +104,47 @@ export function StoryView() {
   );
 }
 
-function ReviewerTools({ storyId, status, protectionLevel, isModerator }: {
+function ReviewerTools({ storyId, revisionId, status, createdBy, isOwn, protectionLevel, isModerator, onStale }: {
   storyId: string;
+  revisionId: string;
   status: string;
+  createdBy: { id: string; displayName: string };
+  isOwn: boolean;
   protectionLevel: number;
   isModerator: boolean;
+  onStale: () => void;
 }) {
   const setStatus = useSetStoryStatus(storyId);
   const setProtection = useSetProtection(storyId);
+  const toast = useToast();
   const error = setStatus.error ?? setProtection.error;
+
+  // Approval names the version on screen; if the author changed it since, reload so the reviewer sees the new text.
+  const approve = () =>
+    setStatus.mutate(
+      { status: 'active', revisionId },
+      {
+        onSuccess: () => toast('Approved. The story is now public.'),
+        onError: (err) => { if (err instanceof ApiError && err.code === 'stale') onStale(); },
+      },
+    );
+
   return (
-    <details className="reviewer-tools">
+    <details className="reviewer-tools" open={status === 'unreviewed' && !isOwn ? true : undefined}>
       <summary>Reviewer tools</summary>
+      {status === 'unreviewed' && (
+        <p className="small reviewer-note">
+          Started by <Link to={`/u/${createdBy.id}`}>{createdBy.displayName}</Link>. It's private until a reviewer approves it.
+        </p>
+      )}
       <div className="action-row">
-        {status === 'unreviewed' && (
-          <button className="button" onClick={() => setStatus.mutate('active')}>Mark as reviewed</button>
+        {status === 'unreviewed' && !isOwn && (
+          <button className="button button-primary" disabled={setStatus.isPending} onClick={approve}>Approve and publish</button>
         )}
         {status === 'hidden' ? (
-          isModerator && <button className="button" onClick={() => setStatus.mutate('active')}>Unhide</button>
+          isModerator && <button className="button" onClick={() => setStatus.mutate({ status: 'active' })}>Unhide</button>
         ) : (
-          <button className="button button-danger" onClick={() => setStatus.mutate('hidden')}>Hide story</button>
+          <button className="button button-danger" onClick={() => setStatus.mutate({ status: 'hidden' })}>Hide story</button>
         )}
       </div>
       {isModerator && (

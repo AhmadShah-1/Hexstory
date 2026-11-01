@@ -90,15 +90,18 @@ export const googleAuthRoutes =
     });
   };
 
-async function upsertGoogleUser(sql: Sql, config: Config, claims: GoogleClaims): Promise<string> {
+export async function upsertGoogleUser(sql: Sql, config: Config, claims: GoogleClaims): Promise<string> {
   const email = claims.email!.toLowerCase();
   const isAdmin = config.ADMIN_EMAILS.includes(email);
   const [existing] = await sql<{ id: string }[]>`SELECT id FROM users WHERE google_sub = ${claims.sub}`;
 
   if (existing) {
+    // Moderator access follows ADMIN_EMAILS both ways: someone taken off the list drops to Reviewer.
     await sql`
       UPDATE users SET email = ${email},
-        trust_level = CASE WHEN ${isAdmin} THEN ${TRUST.MODERATOR} ELSE trust_level END
+        trust_level = CASE WHEN ${isAdmin} THEN ${TRUST.MODERATOR}
+                           WHEN trust_level >= ${TRUST.MODERATOR} THEN ${TRUST.REVIEWER}
+                           ELSE trust_level END
       WHERE id = ${existing.id}`;
     await refreshTrust(sql, existing.id);
     return existing.id;

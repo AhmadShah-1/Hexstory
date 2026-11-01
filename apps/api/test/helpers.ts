@@ -33,8 +33,17 @@ export async function resetDatabase(sql: Sql) {
   await migrate(sql, { environment: 'development', log: () => {} });
 }
 
+/** Test moderators share this address, as moderator access requires being listed in ADMIN_EMAILS. */
+export const MODERATOR_EMAIL = 'moderator@example.com';
+
 export const testConfig = () =>
-  loadConfig({ NODE_ENV: 'test', DATABASE_URL: testDatabaseUrl(), APP_ORIGIN: ORIGIN, UPLOAD_DIR: join(tmpdir(), 'hexstory-test-uploads') });
+  loadConfig({
+    NODE_ENV: 'test',
+    DATABASE_URL: testDatabaseUrl(),
+    APP_ORIGIN: ORIGIN,
+    UPLOAD_DIR: join(tmpdir(), 'hexstory-test-uploads'),
+    ADMIN_EMAILS: MODERATOR_EMAIL,
+  });
 
 /** Another app instance over the same database, e.g. with failing storage or a shared coordinator. */
 export async function buildTestApp(
@@ -68,7 +77,7 @@ export async function makeUser(
   userCounter++;
   const [user] = await sql<{ id: string }[]>`
     INSERT INTO users (google_sub, email, display_name, trust_level, terms_accepted_at, created_at)
-    VALUES (${`sub-${userCounter}`}, ${`u${userCounter}@example.com`}, ${`User ${userCounter}`}, ${opts.trust ?? 0},
+    VALUES (${`sub-${userCounter}`}, ${opts.trust === 3 ? MODERATOR_EMAIL : `u${userCounter}@example.com`}, ${`User ${userCounter}`}, ${opts.trust ?? 0},
             ${opts.termsAccepted === false ? null : new Date()},
             ${new Date(Date.now() - (opts.ageDays ?? 0) * 86_400_000)})
     RETURNING id`;

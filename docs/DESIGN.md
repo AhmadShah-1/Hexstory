@@ -18,7 +18,9 @@ update this file in the same change**, including a line in the [Changelog](#chan
 | **Stories** | Short user-written accounts of events (protests, wars, discoveries…), each tied to one or more hexes. |
 | **The Square** | Live public chat for each hex, among everyone viewing it. |
 | **Versions** | The append-only edit history of a story. Nothing is ever overwritten. |
-| **Watchtower** | The review queue for Reviewers: pending edits, new stories, reports. |
+| **Watchtower** | The review queue for Reviewers: pending edits, new stories waiting for approval, reports. |
+| **Moderation** | The Moderators' screen: ban requests from Reviewers, every user with their level, the audit log. |
+| **Your account** (`/me`) | Your role and progress toward the next one, today's limits, everything you started or edited. |
 
 Principles:
 
@@ -146,7 +148,7 @@ in [DEPLOYMENT.md §7](DEPLOYMENT.md#7-environment-variable-reference). The impo
 | `DATABASE_URL_UNPOOLED` | for migrations on Neon | Direct connection; `migrate` refuses pooled URLs |
 | `APP_ORIGIN` | yes | Public origin, e.g. `https://hexstory.example`. Used for OAuth redirect and CSRF/WebSocket origin checks |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | for sign-in | Without them sign-in is disabled (read-only site) |
-| `ADMIN_EMAILS` | no | Comma-separated emails promoted to Moderator on sign-in |
+| `ADMIN_EMAILS` | no | Comma-separated emails of Moderators (promoted at sign-in; removing an email revokes it on their next request) |
 | `STORAGE_BACKEND` | no | `local` (default; `UPLOAD_DIR`) or `r2` (default and required on Vercel) |
 | `R2_ENDPOINT`, `R2_BUCKET`, `R2_STAGING_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_PUBLIC_BASE_URL` | with `r2` | See DEPLOYMENT.md §3 |
 | `REDIS_URL` | on Vercel | Shared chat fan-out, presence, cooldowns and rate limits. Optional locally |
@@ -208,7 +210,8 @@ TEST_REDIS_URL=redis://localhost:6379 TEST_DATABASE_URL=... npm test -w @hexstor
 ```
 
 API tests **wipe** the database in `TEST_DATABASE_URL` (`DROP SCHEMA public CASCADE`). Never point it at real
-data. `test/realtime.test.ts` runs two app instances sharing Postgres and Redis (ioredis-mock unless
+data. `test/moderation.test.ts` covers private newcomer stories, levels, ban requests, bans with and without
+clean-up, account deletion, removed versions, user pages and the audit log. `test/realtime.test.ts` runs two app instances sharing Postgres and Redis (ioredis-mock unless
 `TEST_REDIS_URL` is set) and checks cross-instance chat, moderation, presence expiry, cooldowns, shared rate
 limits and resync.
 
@@ -252,14 +255,15 @@ Browser ── React SPA ────┼── pages, /api, /auth ─┐
 
 | Table | Purpose |
 |---|---|
-| `users` | Google `sub`, email (private), public `display_name` (unique, case-insensitive), `trust_level` 0–3, `terms_accepted_at`, `banned_at`, `deleted_at` |
+| `users` | Google `sub`, email (private), public `display_name` (unique, case-insensitive), `trust_level` 0–3, `trust_locked` (level set by a Moderator), `terms_accepted_at`, `banned_at`, `deleted_at` |
 | `sessions` | `id` = SHA-256 of the cookie token (raw token never stored), expiry (30 days, sliding) |
 | `stories` | Identity + pointer `current_revision_id`, `status` (unreviewed/active/hidden), `protection_level`, `cell_count` |
-| `story_revisions` | Append-only content: title, `content` (rich document, jsonb), `body` (plain text derived from content), `image_key`/`image_credit` (the first image, used as thumbnail), compact cells, dates, sources (jsonb, ≥1 enforced by CHECK), `status` (pending/accepted/rejected), `flags`, generated `source_count` and `sort_key` |
+| `story_revisions` | Append-only content: title, `content` (rich document, jsonb), `body` (plain text derived from content), `image_key`/`image_credit` (the first image, used as thumbnail), compact cells, dates, sources (jsonb, ≥1 enforced by CHECK), `status` (pending/accepted/rejected), `flags`, `hidden_at` (removed from the history), generated `source_count` and `sort_key` |
 | `story_cells` | Derived index of the current revision's cells at res 2–5 |
 | `comments` | The Square's messages, per display cell |
 | `reports` | User reports on stories, revisions, comments or users |
-| `mod_actions` | Append-only audit log of every moderation action |
+| `mod_actions` | Append-only audit log of every moderation action, with optional `details` (jsonb) |
+| `ban_requests` | Reviewers asking Moderators to ban someone; resolved as banned/declined/deleted (migration 004) |
 | `app_meta` | Facts about the database itself; `environment` = which deployment environment owns it (migration 003) |
 | `schema_migrations` | Applied migration files |
 
@@ -281,36 +285,82 @@ the story was added**: ongoing events first, then `sort_key` = the latest date t
 
 ## 6. Trust & moderation
 
-All numbers live in `apps/api/src/policy.ts`. Change them there and update this table.
+The numbers users see (daily limits, promotion thresholds, held-edit thresholds, chat minimum age) live in
+`RULES` (`packages/shared/src/rules.ts`), so the About and account pages always show what the API enforces;
+the rest are in `apps/api/src/policy.ts`. Change them there and update this section. The About page explains
+all of this to users (`apps/web/src/content/about.md`, with `{{…}}` tokens filled from `RULES`).
 
 | Level | Name | How you get it | What changes |
 |---|---|---|---|
-| 0 | Newcomer | Sign in + accept terms | Can create stories (shown with a "New" tag until a reviewer marks them reviewed). Edits to stories you didn't create, or that are past "unreviewed", are **held for review** |
-| 1 | Member | Account ≥ 3 days **and** accepted contributions on ≥ 3 distinct stories | Edits go live immediately (unless auto-flagged or the story is protected) |
-| 2 | Reviewer | Account ≥ 30 days, ≥ 25 distinct stories, **≥ 15 of them started by someone else** | Watchtower access: accept/reject held edits, restore versions, hide stories and chat messages, resolve reports |
-| 3 | Moderator | Email in `ADMIN_EMAILS` | Everything above + protect stories, unhide stories, ban users |
+| 0 | Newcomer | Sign in + accept terms | New stories are **private until a Reviewer approves them** (only you and Reviewers see them; you can keep editing them meanwhile). Edits to other people's stories are **held for review** |
+| 1 | Member | Account ≥ 3 days **and** accepted contributions on ≥ 3 distinct *published* stories | Stories and edits go live immediately (unless auto-flagged or the story is protected) |
+| 2 | Reviewer | Account ≥ 30 days, ≥ 25 distinct published stories, **≥ 15 of them started by someone else** | Watchtower: approve new stories, accept/reject held edits, restore or remove versions, hide stories and chat messages, resolve reports, **ask Moderators to ban someone**; see anyone's contributions |
+| 3 | Moderator | Email in `ADMIN_EMAILS` | Everything above + Moderation screen: ban (keeping or removing posts), unban, set levels, delete accounts, decline ban requests, read the audit log; protect and unhide stories, put back removed versions |
 
-Promotion counts *distinct stories*, so repeatedly editing your own story cannot farm trust (tested).
+Promotion is automatic and counts *distinct published stories*, so repeatedly editing your own story, or
+writing drafts nobody approved, cannot farm trust (tested). It never demotes.
+
+**Manual levels.** A Moderator can set anyone's level to Newcomer, Member or Reviewer. That sets
+`users.trust_locked`, which pauses automatic promotion for them (so a demotion sticks); "Automatic" clears it
+and re-runs promotion, which may raise them again but never lowers them. Moderator access can't be granted or
+removed in the UI: it follows `ADMIN_EMAILS` both ways. Someone taken off the list is treated as a Reviewer
+from their next request (checked per request in `app.ts`) and stored as one at their next sign-in.
+Moderators can't ban, delete or re-level other Moderators or themselves.
 
 **Rules that make overwriting useless:**
 
 1. **Append-only revisions.** An edit inserts a new revision; `stories.current_revision_id` points to the
    live one. Restoring an old version copies it into a *new* revision, keeping history linear.
-2. **Held edits.** An edit goes live only if the author's trust ≥ `max(Member, story.protection_level)`
+2. **New stories.** A Member's story is `active` (public) at once. A Newcomer's is `unreviewed`: visible only
+   to its creator and Reviewers, listed in its hex only for them, never counted on the map. A Reviewer
+   publishes it ("Approve and publish", sent with the version they read: 409 `stale` if the creator changed
+   it since) or hides it. Accepting a held *first* version of an unreviewed story also publishes it. Nobody
+   can approve their own story.
+3. **Held edits.** An edit goes live only if the author's trust ≥ `max(Member, story.protection_level)`
    (or they created the still-unreviewed story) **and** it has no auto-flags (unless the author is a Reviewer).
-3. **Auto-flags** (`detectFlags`): removing > 60% of the body (`large-removal`); newcomer adding > 2 links,
+4. **Auto-flags** (`detectFlags`): removing > 60% of the body (`large-removal`); newcomer adding > 2 links,
    counting both linked text and typed URLs (`many-links`).
-4. **Optimistic concurrency.** Edits carry `baseRevisionId`; if the story moved on, the API returns 409
+5. **Optimistic concurrency.** Edits carry `baseRevisionId`; if the story moved on, the API returns 409
    `stale` and the user must reload, so concurrent editors never silently overwrite each other.
-5. **No self-review.** Nobody can accept their own held edit. Restore only accepts versions that were once
-   accepted and respects protection, so it can't be used to sneak a held edit live.
-6. **Visibility.** Pending and rejected versions (which may contain abuse) are visible only to Reviewers
-   and their author. Hidden stories are visible only to Reviewers; only Moderators can unhide.
-7. **Daily limits** per trust level (stories 3/20/100/1000, edits 10/60/300/5000, reports 30), enforced inside
+6. **No self-review.** Nobody can accept their own held edit or approve their own story. Restore only
+   accepts versions that were once accepted (and not removed) and respects protection, so it can't be used
+   to sneak a held edit live.
+7. **Visibility.** Pending and rejected versions (which may contain abuse) are visible only to Reviewers
+   and their author. Hidden stories are visible only to Reviewers; only Moderators can unhide (and not while
+   the current version is removed).
+8. **Removed versions.** A Reviewer can remove a version from the history (`story_revisions.hidden_at`), e.g.
+   one that exposed someone's address: it is then visible to Reviewers only and can never be restored. The
+   current version can't be removed (restore an earlier one first). Only Moderators can put one back.
+9. **Daily limits** per trust level (stories 3/10/100/1000, edits 10/20/300/5000, reports 30), enforced inside
    the write transaction under a per-user advisory lock so parallel requests can't exceed them.
-8. **Reports** from any signed-in user (once per item while open) go to the Watchtower.
-9. **Audit log.** Every accept/reject/restore/hide/approve/protect/ban/report resolution is in `mod_actions`.
-10. **Bans** delete the user's sessions and block all writing and chat immediately.
+10. **Reports** from any signed-in user, about a story, a version, a chat message or a person (once per item
+    while open), go to the Watchtower. Hiding a message, removing a version or banning a user closes the
+    reports about it.
+11. **Ban requests.** Reviewers can't ban; they ask (`ban_requests`, one open request per reviewer per user,
+    with a reason). Requests queue on the Moderation screen until a Moderator bans (resolves them as
+    `banned`), declines (`declined`) or deletes the account (`deleted`).
+12. **Bans** (Moderators) delete the user's sessions and block all writing and chat immediately; their chat
+    messages drop out of history and, for the last 24 hours, out of open Squares. The Moderator chooses:
+    - **Keep posts:** stories and edits stay up. Unbanning restores the account (and their messages).
+    - **Remove posts** (`removeContent`, also available later for someone already banned): stories they
+      started are hidden; stories whose current version is theirs roll back to the latest accepted version by
+      someone else (hidden if there is none); their held edits are rejected; **all** their versions are
+      removed from the history, so nothing of theirs can be viewed or restored; their chat messages are hidden;
+      reports they filed are dismissed and reports about their content closed. Changes others made on top of
+      their edits stay (Reviewers can restore further back by hand). Unbanning does not bring any of it back.
+13. **Deleting an account** (Moderators) anonymises it exactly like self-deletion ("Deleted user", signed out,
+    email removed), optionally removing posts first as above. The person can sign up again as a new
+    Newcomer; to keep someone out, ban them instead.
+14. **Audit log.** Every moderation action is in `mod_actions` (actor, action, target, reason and, for bans
+    and deletions, `details` with what a clean-up removed), shown to Moderators on the Moderation screen.
+    Action codes: `accept`, `reject`, `approve`, `hide`, `unhide`, `restore`, `rollback`, `protect:N`,
+    `remove-version`, `restore-version`, `report:dismissed|actioned`, `ban-request`, `ban-request:declined`,
+    `ban`, `ban:clean-up`, `unban`, `trust:0|1|2|auto`, `delete-user`.
+
+**Contributions.** Everyone has a page (`/u/:id`): name, role and join date are public; the lists of stories
+they started and versions they wrote (with status, including private and removed ones) are shown to them and
+to Reviewers only, to avoid making it easy to profile someone from everything they wrote. Your own page is
+`/me` (role, progress toward the next level, today's usage against the limits, contributions).
 
 ## 7. The Square (live chat)
 
@@ -382,7 +432,8 @@ failed. Two Redis connections per instance (commands + subscriber).
 - **Hex panel:** title "This region" + coordinates, tabs **Stories** | **The Square**, sticky
   "Write a story here" button. Story rows: 56px thumbnail (`object-fit: cover`, hex glyph if none), serif
   title (2 lines max), event date, **source count badge** (neutral grey for 1, darker for 2–3, teal for 4+),
-  area for multi-hex stories, and a quiet "New" tag for unreviewed stories.
+  area for multi-hex stories, and a "Waiting for review" tag on unreviewed stories (only their creator and
+  Reviewers ever see those).
 - **Story view:** image, title, date · sources · area, body, numbered sources with hostnames, the disclaimer
   box, then Edit · Versions · Share · Report. Reviewer tools are folded in a `<details>`.
 - **Editor:** opens in a wide panel while the map switches to *select mode* (clicks toggle regions). Fields:
@@ -400,6 +451,13 @@ failed. Two Redis connections per instance (commands + subscriber).
 - **Sign-in:** never a wall. Write and chat actions show an inline "Sign in with Google" prompt and return
   you to the same page afterwards. The first sign-in shows a one-time **Welcome** dialog: choose a public name
   (pre-filled with the Google first name only; the field can be cleared and retyped freely) and accept the Terms, Privacy Policy and CC BY-SA licence.
+- **Your account** (`/me`, the avatar button): your role in plain words, progress bars toward the next level,
+  today's usage against the daily limits, your stories and edits with their status (Live, Waiting for review,
+  Not accepted, Removed, Story waiting for approval), name, sign out, delete. **User pages** (`/u/:id`): name,
+  role, join date and Report for everyone; contributions and moderation tools for Reviewers/Moderators.
+- **Moderation** (`/moderation`, Moderators): Ban requests, Users (search, level and status filters) and Audit
+  log tabs. Bans and deletions open a dialog with an explicit "keep posts" / "remove posts" choice that spells
+  out what removal does. On phones, Moderators' brand pill shrinks to the logo so the staff buttons fit.
 - **Required legal text in the UI:** the Welcome checkbox, the disclaimer under every story, the licence
   notice in the editor, the "Messages are public. Be kind." chat placeholder, and About · Terms · Privacy links
   bottom-left.
@@ -413,7 +471,10 @@ failed. Two Redis connections per instance (commands + subscriber).
 | `/s/:id` | Story |
 | `/s/:id/edit`, `/new?cell=` | Editor (lazy-loaded) |
 | `/s/:id/versions`, `/v/:revisionId` | Versions list, single version with word diff and review actions |
-| `/watchtower` | Review queue (Reviewers) |
+| `/watchtower` | Review queue (Reviewers): pending edits, new stories, reports |
+| `/moderation` (`?tab=requests|users|log`) | Moderators: ban requests, users, audit log |
+| `/me` (`?tab=overview|stories|edits`) | Your account: role, progress, limits, contributions, name, delete |
+| `/u/:id` | Someone's page; contributions and moderation tools for Reviewers/Moderators |
 | `/about`, `/terms`, `/privacy` | Modal pages (markdown) |
 
 ## 10. API reference
@@ -430,12 +491,13 @@ All JSON. Errors are `{ error: code, message }`, and `message` is always safe to
 | `GET /api/cells/:cell/stories?offset=` | anyone | Story list, event-date order, 30 per page |
 | `GET /api/cells/:cell/messages` | anyone | Last 50 Square messages |
 | `GET /api/stories/:id` | anyone | Story + current revision + `can` permissions |
-| `POST /api/stories` | writer | Create → `{ storyId, revisionId, status: live|pending }` |
+| `POST /api/stories` | writer | Create → `{ storyId, revisionId, status: live|pending, storyStatus }` |
 | `PUT /api/stories/:id` | writer | Edit (needs `baseRevisionId`) |
-| `GET /api/stories/:id/revisions`, `GET /api/revisions/:id` | anyone* | History (*unaccepted only for reviewers/author) |
+| `GET /api/stories/:id/revisions`, `GET /api/revisions/:id` | anyone* | History (*unaccepted only for reviewers/author, removed only for reviewers) |
+| `POST /api/revisions/:id/removed` | reviewer | `{ removed, reason? }` remove from history (put back: moderator) |
 | `POST /api/revisions/:id/review` | reviewer | `{ decision: accept|reject }` |
 | `POST /api/stories/:id/restore` | reviewer | `{ revisionId }` |
-| `POST /api/stories/:id/status` | reviewer | `{ status: active|hidden }` (unhide: moderator) |
+| `POST /api/stories/:id/status` | reviewer | `{ status: active|hidden, revisionId?, reason? }` approve/hide (unhide: moderator) |
 | `POST /api/stories/:id/protection` | moderator | `{ level: 0..3 }` |
 | `POST /api/uploads` | writer | `{ size }` → `{ id, upload: { url, method: 'PUT', headers } }` (20/hour) |
 | `PUT <upload.url>` | browser | The original's bytes. Pre-signed R2 URL in production; locally `PUT /api/uploads/:id/original` |
@@ -444,7 +506,16 @@ All JSON. Errors are `{ error: code, message }`, and `message` is always safe to
 | `GET /api/watchtower` | reviewer | `{ pending, unreviewed, reports }` |
 | `POST /api/reports/:id/resolve` | reviewer | `{ resolution: dismissed|actioned }` |
 | `POST /api/messages/:id/hide` | reviewer | Hide a chat message |
-| `POST /api/users/:id/ban` | moderator | `{ banned, reason? }` |
+| `GET /api/users/:id` | anyone* | Profile (*`details` for self/reviewers, `moderation` for reviewers) |
+| `GET /api/users/:id/stories`, `/revisions` (`?offset=`) | self, reviewer | Contributions |
+| `POST /api/users/:id/ban-requests` | reviewer | `{ reason }` ask Moderators to ban |
+| `POST /api/users/:id/ban-requests/decline` | moderator | `{ reason? }` |
+| `POST /api/users/:id/ban` | moderator | `{ banned, reason?, removeContent? }` → `{ cleanup }` |
+| `POST /api/users/:id/delete` | moderator | `{ removeContent, reason? }` → `{ cleanup }` |
+| `POST /api/users/:id/trust` | moderator | `{ level: 0|1|2|'auto', reason? }` |
+| `GET /api/moderation/users` | moderator | `?q=&level=&filter=all|banned|requested|reported&offset=` |
+| `GET /api/moderation/ban-requests` | moderator | Users with open ban requests |
+| `GET /api/moderation/log` | moderator | Audit log `?action=&actorId=&targetType=&targetId=&offset=` |
 | Socket.IO `join` (acked), `leave`, `send` (ack `{ok, delayed?}`) → `message`, `presence`, `hidden`, `resync` | | The Square |
 
 "Writer" = signed in, terms accepted, not banned.
@@ -482,8 +553,12 @@ Designed so features can be added without touching unrelated code:
   release), because the previous deployment keeps serving until the new one is promoted. Never edit an
   applied migration.
 - **Change a policy number:** edit `apps/api/src/policy.ts`, update §6 here, run the tests.
-- **Make someone a Moderator:** add their email to `ADMIN_EMAILS` in Doppler; it applies at their next sign-in.
-  (To make someone a Reviewer by hand: `UPDATE users SET trust_level = 2 WHERE display_name = '...'`.)
+- **Make someone a Moderator:** add their email to `ADMIN_EMAILS` (Doppler locally, Vercel in production); it
+  applies at their next sign-in. Removing it takes effect on their next request.
+- **Promote or demote someone (up to Reviewer):** Moderation → Users → their page → Level. Choose
+  "Automatic" to hand them back to the promotion rules.
+- **Ban someone:** their page (`/u/:id`) → Ban…, choosing keep or remove posts. Reviewers use "Request a
+  ban" there instead; requests wait under Moderation → Ban requests.
 - **Production deploy:** Vercel, see [DEPLOYMENT.md](DEPLOYMENT.md).
 - **Alternative: single server:**
   1. Doppler config `prd` with `NODE_ENV=production`, `APP_ORIGIN=https://<domain>`, `TRUST_PROXY=true`,
@@ -505,8 +580,12 @@ Designed so features can be added without touching unrelated code:
   (rate-limited to 20/hour/user). Follow-up: track uploads, serve only once referenced, sweep orphans.
   (Unprocessed originals are private and expire after a day.)
 - Locally, abandoned staged originals stay in `<UPLOAD_DIR>-staging` until deleted by hand.
-- Reviewers are auto-promoted by activity; there is no UI to demote (use SQL). Consider manual promotion
-  if abuse appears.
+- Reviewers are auto-promoted by activity; Moderators can demote them and pin the level (`trust_locked`).
+- Removing someone's posts can't remove what others built on top of their edits, and images they uploaded
+  stay reachable by URL (see the image follow-up above). Unbanning doesn't undo a clean-up; Moderators
+  bring back individual stories with Unhide.
+- There's no notification system: reviewers aren't told when a ban request is decided (it shows on the
+  person's page), and users aren't told when their story is approved.
 - WebSockets close at the Function's `maxDuration` (5 min on Hobby), so open Squares reconnect that often;
   each open connection keeps its instance's memory billed (DEPLOYMENT.md §8).
 - Chat delivery between instances is at-most-once; clients reconcile from Postgres on reconnect/resync (§7).
@@ -518,6 +597,15 @@ Designed so features can be added without touching unrelated code:
 
 ## Changelog
 
+- **2026-11-01**: Moderation and accounts. Newcomer stories are private until a Reviewer approves them
+  (approval checks the version read; accepting a held first version publishes); only published stories count
+  toward promotion. Member daily limits lowered to 10 stories / 20 edits. Contribution rules moved to shared
+  `RULES` and shown on a rewritten About page. New: Moderation screen (ban requests, users, audit log); ban
+  with "keep posts" or "remove posts" (hide/roll back/remove versions/hide messages/close reports); moderator
+  account deletion; manual levels with `trust_locked`; Reviewer ban requests; removing single versions from
+  the history; reports about people and versions; user pages (`/u/:id`) and an account page (`/me`) with
+  progress, limits and contributions (replaces the account dialog). Moderator access now follows
+  `ADMIN_EMAILS` on every request. Migration `004_moderation.sql`.
 - **2026-11-01**: Vercel deployment (Neon, Cloudflare R2, Redis Cloud). One Function serves API, auth,
   Socket.IO (WebSocket only) and page HTML; the CDN serves built assets. Migrations moved out of startup into
   an explicit, locked `migrate` command with an environment marker (migration `003_app_meta.sql`), checked at

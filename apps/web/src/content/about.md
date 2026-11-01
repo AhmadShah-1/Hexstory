@@ -8,18 +8,59 @@ with whoever else is looking at the same place right now.
 
 - **Stories** are short accounts of events, written by anyone. Each one names the regions it covers, when it
   happened, and at least one source. Stories are listed with the most recent events first.
-- **The Square** is the live conversation for each hexagon. It's public, so be kind.
+- **The Square** is the live conversation for each hexagon. It's public, so be kind. New accounts can post
+  after {{chatMinAccountMinutes}} minutes.
 - **Versions**: every edit is kept. Nothing is ever overwritten, and any change can be undone.
 
-## Keeping it honest
+## Roles
 
-Anyone can write, but trust is earned:
+Anyone can write, but trust is earned. Everyone starts as a Newcomer and moves up automatically as their
+contributions are accepted. You can see your role and how close you are to the next one on
+[your account page](/me).
 
-- New accounts can add stories right away. Their edits to other people's stories wait for a reviewer.
-- After a few accepted contributions you become a **Member**, and your edits go live immediately.
-- Long-standing contributors become **Reviewers**, who look after the **Watchtower**: pending edits,
-  new stories and reports.
-- Edits that remove most of a story or add lots of links are always held for review.
+- **Newcomer**: everyone who has just signed in. You can write stories, suggest edits and chat. Your new
+  stories stay private until a reviewer approves them, and your edits wait for a reviewer.
+- **Member**: after {{promotion.member.minAgeDays}} days, once you've contributed accepted text to
+  {{promotion.member.minStories}} different published stories. Your stories and edits go live straight away.
+- **Reviewer**: after {{promotion.reviewer.minAgeDays}} days, once you've contributed to
+  {{promotion.reviewer.minStories}} different published stories, at least {{promotion.reviewer.minOthersStories}}
+  of them started by someone else. Reviewers look after the **Watchtower**: they approve new stories, accept or
+  turn down edits that are waiting, restore or remove versions, hide harmful stories and messages, and handle
+  reports.
+- **Moderator**: appointed by the people who run Hexstory. Moderators can do everything reviewers can, and can
+  also ban people, change someone's role, protect stories that keep being vandalised, and read the log of
+  every moderation action.
+
+Only **published** stories count toward promotion, and each story counts once however many times you edit it.
+A moderator can also set someone's role by hand; automatic promotion is then paused for them.
+
+## When do my changes go live?
+
+- **A Newcomer's new story** is private at first: only you and reviewers can see it. It's published as soon as
+  a reviewer approves it, and you can keep editing it until then.
+- **A Newcomer's edit** to any other story (or to their own story once it's published) waits for a reviewer to
+  accept it. So does a Newcomer's story or edit with more than {{newcomerMaxLinks}} links.
+- **Members' stories and edits** go live straight away, with two exceptions that wait for a reviewer:
+  - an edit that removes more than {{largeRemovalPercent}}% of a story's text (reviewers' own edits don't wait);
+  - an edit to a story a moderator has protected, unless your role is high enough to edit it directly.
+
+You can follow everything you've written, and whether it's live or still waiting, on [your account page](/me).
+
+## Daily limits
+
+To keep things calm, everyone has a daily limit, counted over the last 24 hours. It grows with your role.
+
+| | Newcomer | Member | Reviewer | Moderator |
+|---|---|---|---|---|
+| New stories | {{storiesPerDay.0}} | {{storiesPerDay.1}} | {{storiesPerDay.2}} | {{storiesPerDay.3}} |
+| Edits | {{editsPerDay.0}} | {{editsPerDay.1}} | {{editsPerDay.2}} | {{editsPerDay.3}} |
+
+## Reports and bans
+
+If you see vandalism, harassment, someone's personal details, spam or a copyright problem, use **Report** on the
+story, version, chat message or person (up to {{reportsPerDay}} reports a day). Reviewers look at every report.
+They can hide the content, and they can ask a moderator to ban someone. A ban stops the person from writing or
+chatting straight away, and moderators can also take down what they posted.
 
 ## Please remember
 

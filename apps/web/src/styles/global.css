@@ -103,6 +103,9 @@ h1, h2, h3, p { margin: 0; }
     animation: sheet-in 0.25s ease-out;
   }
   .app:has(.panel) .account, .app:has(.panel-wide) .account { right: 14px; }
+  /* Moderators get two staff buttons; keep them clear of the brand on narrow screens. */
+  .account .button-floating { padding: 6px 12px; font-size: 13.5px; }
+  .app:has(.account .button-floating + .button-floating) .brand span { display: none; }
   .app:has(.panel) .footer-links, .app:has(.panel) .maplibregl-ctrl-bottom-right { display: none; }
   .hint { bottom: 96px; white-space: normal; text-align: center; width: max-content; max-width: calc(100vw - 32px); }
 }
@@ -339,3 +342,81 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--f
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---- Moderation ---- */
+.button-destructive { background: var(--danger); border-color: var(--danger); color: #fff; }
+.button-destructive:hover { background: #991b1b; }
+.notice-danger { background: #fee2e2; color: var(--danger); }
+.queue-note { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+.excerpt {
+  font-family: var(--serif); font-size: 15px; line-height: 1.55; margin: 4px 0 0; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+}
+.mod-tools { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 16px; }
+.mod-tools > p { margin-bottom: 8px; }
+.mod-level { margin-top: 12px; }
+.mod-level .field { margin-bottom: 10px; }
+.mod-requests { margin: 6px 0 8px; padding-left: 18px; font-size: 13.5px; }
+.mod-requests li { margin-bottom: 4px; overflow-wrap: anywhere; }
+.choice-list label { align-items: flex-start; }
+.choice-list input { margin-top: 4px; }
+.choice-list label > span { display: grid; gap: 2px; }
+.choice-list p { margin: 0; }
+
+.mod-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.mod-filters input:not([type='checkbox']) { flex: 1 1 200px; width: auto; }
+.mod-filters select { flex: 1 1 140px; width: auto; }
+.filter-note {
+  display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 8px 12px; font-size: 13.5px; margin-bottom: 12px;
+}
+.filter-note .link-button { font-size: 13.5px; }
+.mod-list { list-style: none; margin: 0 -12px; padding: 0; }
+.mod-row { display: block; padding: 10px 12px; border-radius: 10px; color: var(--ink); font-size: 14px; overflow-wrap: anywhere; }
+.mod-row:hover { background: var(--surface-2); text-decoration: none; }
+.mod-row-meta { display: block; font-size: 13px; color: var(--muted); }
+.mod-row-meta .chip { margin-left: 6px; }
+.log-entry { padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 14px; overflow-wrap: anywhere; }
+.log-entry:last-child { border-bottom: 0; }
+.log-entry p { margin-top: 2px; }
+.log-entry time { display: block; margin-top: 2px; }
+.log-target { font-family: var(--serif); }
+.load-more { display: flex; justify-content: center; margin: 12px 0 4px; }
+
+/* ---- Account & contributions ---- */
+.profile-head { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; }
+.profile-head > div:nth-child(2) { min-width: 0; flex: 1; }
+.profile-name { font-weight: 650; font-size: 16px; overflow-wrap: anywhere; }
+.profile-report { margin-left: auto; }
+.avatar-lg { width: 44px; height: 44px; font-size: 16px; }
+.role-box { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px 12px; display: grid; gap: 6px; }
+.role-box .section-label { margin: 0; }
+.account-section { margin-top: 18px; }
+.progress-item { margin-bottom: 10px; }
+.progress-label { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+.progress { height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.progress-bar { height: 100%; background: var(--accent); border-radius: inherit; }
+.progress-done { background: var(--ok); }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin: 8px 0 12px; }
+.stat-grid > div { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; min-width: 0; }
+.stat-grid dt { font-size: 12.5px; color: var(--muted); }
+.stat-grid dd { margin: 0; overflow-wrap: anywhere; }
+.stat-grid dd:nth-of-type(1) { font-size: 20px; font-weight: 650; }
+.name-row { flex-wrap: nowrap; }
+.name-row input { flex: 1; min-width: 0; }
+.story-row-meta .chip { margin-left: 0; }
+.chip-gap { margin-left: 6px; }
+.contrib-title { font-family: var(--serif); font-weight: 600; font-size: 15px; overflow-wrap: anywhere; }
+.contrib-flags { margin-top: 4px; }
+.contrib-more { padding-bottom: 16px; }
+.reviewer-note { margin-top: 8px; }
+.publish-hint { color: var(--ink); }
+.remove-confirm { width: 100%; display: grid; gap: 8px; }
+.message-author { color: var(--ink); font-weight: 650; }
+/* A row that is one big link, with other links (e.g. an author) clickable above it. */
+.stretch { position: relative; }
+.stretch-link { color: inherit; }
+.stretch-link::after { content: ''; position: absolute; inset: 0; }
+.stretch .above { position: relative; z-index: 1; }
+.prose table { display: block; max-width: 100%; overflow-x: auto; }

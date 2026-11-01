@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router';
 import { TRUST, type ChatMessage } from '@hexstory/shared';
 import { errorMessage } from '../api/client';
 import { useHideMessage, useSession } from '../api/queries';
@@ -93,7 +94,7 @@ function Message({ message, canModerate, canReport, onHidden }: {
       <div className="avatar" aria-hidden="true">{initials(message.author.displayName)}</div>
       <div className="message-main">
         <div className="message-head">
-          <strong>{message.author.displayName}</strong>
+          <Link to={`/u/${message.author.id}`} className="message-author">{message.author.displayName}</Link>
           <time className="muted" dateTime={message.createdAt}>{timeAgo(message.createdAt)}</time>
           <span className="message-actions">
             {canReport && <button className="link-button" onClick={() => setReporting(true)}>Report</button>}
