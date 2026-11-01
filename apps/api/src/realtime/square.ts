@@ -6,6 +6,7 @@ import { SESSION_COOKIE, getSessionUser } from '../auth/sessions.js';
 import type { Coordinator, RoomEvent } from '../coordination.js';
 import type { Sql } from '../db.js';
 import { POLICY } from '../policy.js';
+import { getRules } from '../services/settings.js';
 import { chatBlockReason, postMessage } from '../services/square.js';
 
 interface SocketData {
@@ -130,7 +131,7 @@ export async function attachSquare(server: HttpServer, deps: SquareDeps): Promis
         if (!parsed.success) return ack({ ok: false, error: 'Messages must be 1–500 characters.' });
         // Re-read the session on every message so bans and sign-outs apply immediately.
         const user = await getSessionUser(deps.sql, socket.data.token);
-        const blocked = chatBlockReason(user);
+        const blocked = chatBlockReason(user, (await getRules(deps.sql)).chatMinAccountMinutes);
         if (blocked || !user) return ack({ ok: false, error: blocked ?? 'Sign in first.' });
 
         let free: boolean;

@@ -1,4 +1,5 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { RULES, type EditableRules, type Rules } from '@hexstory/shared';
 import type {
   AuditEntry,
   BanRequestGroup,
@@ -18,6 +19,7 @@ import type {
   StoryDetail,
   StoryRevision,
   StorySummary,
+  SupportLinks,
   UploadTicket,
   UploadedImage,
   UserProfile,
@@ -29,6 +31,7 @@ import { ApiError, api } from './client';
 /** All query keys in one place so invalidation stays consistent. */
 export const keys = {
   session: ['session'] as const,
+  support: ['support'] as const,
   cells: (res: number) => ['cells', res] as const,
   cellStories: (cell: string) => ['cell-stories', cell] as const,
   story: (id: string) => ['story', id] as const,
@@ -52,6 +55,10 @@ function queryString(params: Record<string, string | number | undefined>): strin
   const entries = Object.entries(params).filter((e): e is [string, string | number] => e[1] !== undefined && e[1] !== '');
   return new URLSearchParams(entries.map(([k, v]) => [k, String(v)])).toString();
 }
+
+/** Support page links (public config). Rarely changes, so it is fetched once per visit. */
+export const useSupportLinks = () =>
+  useQuery({ queryKey: keys.support, queryFn: () => api<SupportLinks>('/api/support'), staleTime: Infinity });
 
 export const useSession = () =>
   useQuery({ queryKey: keys.session, queryFn: () => api<SessionInfo>('/api/session'), staleTime: 60_000 });
@@ -310,6 +317,28 @@ export function useSetTrust(userId: string) {
   });
 }
 
+// ---- Site rules (Moderators can change some of them) ----
+
+/** The rules in force. Starts from the defaults compiled in, so pages never wait on it. */
+export const useRules = () =>
+  useQuery({ queryKey: ['rules'], queryFn: () => api<Rules>('/api/rules'), staleTime: 5 * 60_000, placeholderData: RULES as Rules });
+
+type ModSettings = { rules: EditableRules; updated: { at: string; by: { id: string; displayName: string } } | null };
+
+export const useModSettings = (enabled = true) =>
+  useQuery({ queryKey: ['mod-settings'], queryFn: () => api<ModSettings>('/api/moderation/settings'), enabled });
+
+export function useUpdateModSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { rules: EditableRules; reason?: string }) => api<ModSettings>('/api/moderation/settings', { method: 'PUT', body: input }),
+    onSuccess: (data) => {
+      qc.setQueryData(['mod-settings'], data);
+      for (const key of ['rules', 'audit-log', 'user']) qc.invalidateQueries({ queryKey: [key] });
+    },
+  });
+}
+
 // ---- Your account ----
 
 export function useUpdateProfile() {
@@ -359,3 +388,27 @@ export async function uploadImage(file: File): Promise<UploadedImage> {
 }
 
 export const signInUrl = (returnTo: string) => `/auth/google?returnTo=${encodeURIComponent(returnTo)}`;
+
+// ---- Resource usage (moderators) ----
+
+type UsageReport = import('@hexstory/shared').UsageReport;
+const usageKey = ['usage'] as const;
+
+/** Hosting usage. The server caches provider readings (about 15 min), so this never polls. */
+export const useUsage = (enabled = true) =>
+  useQuery({
+    queryKey: usageKey,
+    queryFn: () => api<UsageReport>('/api/moderation/usage'),
+    enabled,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+
+/** Asks every provider again now; the server allows this once a minute (429 otherwise). */
+export function useRefreshUsage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api<UsageReport>('/api/moderation/usage/refresh', { method: 'POST', body: {} }),
+    onSuccess: (report) => qc.setQueryData(usageKey, report),
+  });
+}

@@ -27,6 +27,14 @@ export interface Coordinator {
   touchPresence(cell: string, members: string[], ttlMs: number): Promise<void>;
   removePresence(cell: string, member: string): Promise<void>;
   countPresence(cell: string): Promise<number>;
+  /**
+   * The Redis server's `INFO` text over the existing command connection, or null when there is no
+   * shared Redis (memory coordinator). Used by the moderators' usage dashboard; rejects on failure.
+   */
+  info(): Promise<string | null>;
+  /** A small shared JSON value, or null when absent or expired (caches shared by every instance). */
+  getJson<T>(key: string): Promise<T | null>;
+  setJson(key: string, value: unknown, ttlMs: number): Promise<void>;
   /** Client for @fastify/rate-limit's shared store, or null to keep limits in process memory. */
   rateLimitRedis: Redis | null;
   /** Prefix for any other shared keys, so environments sharing one Redis never collide. */
@@ -39,6 +47,8 @@ export function createMemoryCoordinator(): Coordinator {
   const handlers: ((event: RoomEvent) => void)[] = [];
   const claims = new Map<string, number>();
   const presence = new Map<string, Map<string, number>>();
+  // Stored as JSON text so callers never share (and mutate) the same object.
+  const values = new Map<string, { json: string; until: number }>();
 
   const live = (cell: string) => {
     const members = presence.get(cell);
@@ -76,6 +86,21 @@ export function createMemoryCoordinator(): Coordinator {
     },
     async countPresence(cell) {
       return live(cell);
+    },
+    async info() {
+      return null;
+    },
+    async getJson<T>(key: string) {
+      const entry = values.get(key);
+      if (!entry) return null;
+      if (entry.until <= Date.now()) {
+        values.delete(key);
+        return null;
+      }
+      return JSON.parse(entry.json) as T;
+    },
+    async setJson(key, value, ttlMs) {
+      values.set(key, { json: JSON.stringify(value), until: Date.now() + ttlMs });
     },
     async close() {
       handlers.length = 0;
@@ -139,6 +164,16 @@ export function createRedisCoordinator(client: Redis, subscriber: Redis, keyPref
       const key = presenceKey(cell);
       const results = await execOrThrow(client.multi().zremrangebyscore(key, '-inf', Date.now()).zcard(key));
       return Number(results[1]);
+    },
+    async info() {
+      return client.info();
+    },
+    async getJson<T>(key: string) {
+      const raw = await client.get(`${keyPrefix}${key}`);
+      return raw === null ? null : (JSON.parse(raw) as T);
+    },
+    async setJson(key, value, ttlMs) {
+      await client.set(`${keyPrefix}${key}`, JSON.stringify(value), 'PX', Math.max(1, Math.round(ttlMs)));
     },
     async close() {
       await Promise.allSettled([subscriber.quit(), client.quit()]);

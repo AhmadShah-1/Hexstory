@@ -313,6 +313,244 @@ Integrations → Vercel) to sync them into Vercel's Production and Preview envir
 variables you own: `APP_ORIGIN`, `GOOGLE_*`, `ADMIN_EMAILS` and `R2_*`. Let the Neon and Redis integrations
 keep managing `DATABASE_URL*` and `REDIS_URL`, so the two don't overwrite each other.
 
+<a id="support-links"></a>
+
+## Support page (Stripe and PayPal links)
+
+The public `/support` page (footer link **Support**) offers voluntary contributions through two
+provider-hosted pages: a **Stripe Payment Link** ("Support with card") and a **PayPal.Me** link
+("Support with PayPal"). Hexstory itself has no payment SDK, API keys, webhooks, payment records or
+supporter badges, never collects payment details, and never treats a return URL as proof of payment.
+Contributions buy nothing: no features, access, moderation privileges or preferential treatment. Don't
+describe them as charitable or tax-deductible donations.
+
+Each option appears only when its variable holds a valid link; with neither set the page says
+contributions aren't available right now.
+
+### Stripe Payment Link ("Customers choose what to pay")
+
+Sources: [Create a payment link](https://docs.stripe.com/payment-links/create),
+[After a payment link payment](https://docs.stripe.com/payment-links/post-payment),
+[Customize checkout for Payment Links](https://docs.stripe.com/payment-links/customize) (checked 2026-11-01).
+
+1. **Account and eligibility first.** During Stripe onboarding, describe Hexstory's activity accurately
+   (a free, community-written history map funded by voluntary contributions) and confirm with Stripe the
+   correct classification for this kind of payment. Stripe accepts tips only for something you already
+   provide and donations only toward a defined goal you commit to, with country-specific restrictions:
+   read [Requirements for accepting tips or donations](https://support.stripe.com/questions/requirements-for-accepting-tips-or-donations).
+   Renaming "donations" to "contributions" or "support" does not by itself establish eligibility.
+2. Stripe Dashboard → **Payment Links** → **New** (or **+** → **Payment link**).
+3. Select **Customers choose what to pay**; add a title (e.g. "Support Hexstory"), a short description
+   that matches the Support page wording ("Voluntary contribution toward hosting, storage and
+   development. Does not unlock features or privileges."), and optionally an image.
+4. Optional: a **suggested (preset) amount**, and **minimum / maximum** amounts (the default maximum is
+   10,000.00 USD). This pricing model has no recurring payments, which is what we want: no subscriptions.
+5. Quantity: a customer-chosen-amount link always has quantity 1; don't add other line items, and don't
+   enable **Let customers adjust quantity**.
+6. **After the payment** → keep **Confirmation page** (optionally with a custom thank-you message). Don't
+   redirect back to Hexstory: the site has nothing to show there and must never treat a redirect as proof
+   of payment.
+7. Leave optional fields (addresses, phone, custom fields) off: collect nothing you don't need.
+8. **Create link** and copy it. Stripe-hosted Payment Links are `https://buy.stripe.com/<id>`, the only
+   host Hexstory accepts (Stripe's optional custom domains such as `pay.example.com` are rejected by the
+   allowlist on purpose). A link created in **test mode / a sandbox**
+   (`https://buy.stripe.com/test_…`) also passes validation, so you can try the whole flow with Stripe's
+   test cards on Preview before switching to the live link.
+
+Cards are paid on Stripe's checkout page; payers don't need a Stripe account. Apple Pay and Google Pay
+appear only if enabled in your [payment method settings](https://dashboard.stripe.com/settings/payment_methods)
+and supported by the payer's device and browser, so the page only says they *may* be offered.
+
+### PayPal.Me link
+
+Sources: [What is PayPal.Me?](https://www.paypal.com/cshelp/article/HELP432),
+[PayPal.Me FAQ](https://www.paypal.com/us/selfhelp/article/what-is-paypal.me-faq3025) (checked 2026-11-01).
+
+PayPal.Me links are created on PayPal.Me while signed in to PayPal, and are shown afterwards in the
+**Profile** section of your PayPal **Account settings**. One link per account; the name can't be changed
+later; business accounts can only accept Goods and Services payments. Hexstory's link is
+**`https://www.paypal.com/paypalme/hexstory`**. Accepted forms: `https://www.paypal.com/paypalme/<name>`
+and `https://paypal.me/<name>` (an amount suffix such as `/5` is allowed).
+
+### Hosting terms
+
+Vercel's Hobby plan is for non-commercial use, but its
+[fair use guidelines](https://vercel.com/docs/limits/fair-use-guidelines#commercial-usage) state that
+asking for donations does not count as commercial usage. That holds only while contributions buy no
+product, service, feature or benefit, which is why the Support page says so explicitly.
+
+### Configuring the links
+
+| Variable | Example | Secret |
+|---|---|---|
+| `STRIPE_SUPPORT_URL` | `https://buy.stripe.com/<id>` | no (public link) |
+| `PAYPAL_SUPPORT_URL` | `https://www.paypal.com/paypalme/hexstory` | no (public link) |
+
+- **Locally:** `doppler secrets set STRIPE_SUPPORT_URL` and `doppler secrets set PAYPAL_SUPPORT_URL`
+  (config `dev`), then restart `npm run dev`.
+- **Vercel:** Project → Settings → Environment Variables, for **Production** and (with test-mode links if
+  you like) **Preview**. They are not sensitive, so they don't need the "Sensitive" flag.
+- The API reads them at startup and serves them from `GET /api/support`; the frontend needs no rebuild.
+  On Vercel, environment variable changes apply **only to new deployments: redeploy** (Deployments → ⋯ →
+  **Redeploy**) after changing them.
+- Validation (`packages/shared/src/support.ts`): `https://` only, no username/password, no port, and an
+  exact hostname (`buy.stripe.com`; `www.paypal.com` with a `/paypalme/<name>` path, or `paypal.me`).
+  An invalid value never stops the site: that option is hidden and the startup log says
+  `STRIPE_SUPPORT_URL ignored: <reason>` (the URL itself is not logged). Check `GET /api/support` after
+  deploying: it returns `{ "stripe": "…" | null, "paypal": "…" | null }`.
+
+<a id="resource-usage"></a>
+
+## Resource usage dashboard
+
+Moderators see hosting usage under **Moderation → Resource usage** (`/moderation?tab=usage`). Only
+Moderators (`ADMIN_EMAILS`) can open it; Reviewers get "not allowed". The browser never talks to a
+provider: the API reads each provider itself, with its own short timeout (4 s). Readings are shared
+between Function instances through Redis and reused for 15 minutes (`USAGE_CACHE_SECONDS`). **Refresh**
+re-reads everything, at most once a minute for the whole site. Nothing polls in the background, so
+nothing wakes Neon on a timer: providers are only asked when a Moderator opens the tab or presses
+Refresh. When a reading fails, the last good value stays on screen, marked *Stale (updated … ago)*.
+Error messages are fixed texts; provider responses, tokens and connection strings never reach the
+browser. The dashboard only reads: it never changes provider settings or plans.
+
+Every number shows its scope (database, project, bucket or whole account), whether it is **Now** (in use
+at the moment) or **This period** (adds up until it resets, with the period and reset date when known),
+when it was measured, where it came from (*measured by the app* with our own query, or *provider data*
+from the provider's API), and whether it is approximate. A percentage and bar appear only when a limit is
+known, finite, above zero and in the same unit. **Limits are never assumed**: they come from a provider
+API where one reports them, otherwise from the optional `USAGE_LIMIT_*` variables below; without one,
+the dashboard shows the usage alone. Missing data is shown as *Unavailable*, *Not configured* or
+*Couldn't read*, never as 0. Each limit is labelled **hard limit** (the service stops, throttles or
+pauses) or **included** (an allowance; use beyond it is billed).
+
+### What works on our plans
+
+Checked against the providers' documentation on 2026-11-01.
+
+| Provider | Metric | Works with | Kind / scope | Notes |
+|---|---|---|---|---|
+| Neon | Database size | nothing extra (`pg_database_size()` over our own connection) | Now / this database | Exact for this database. Not compared with Neon's limit, which covers every branch of the project. |
+| Neon | Project storage (all branches) | optional Neon API key | Now / project | Sum of each branch's `logical_size` (`GET /projects/{id}/branches`), which is what the Free plan's storage cap counts.[^neon-calc] |
+| Neon | Compute (CU-hours) | optional Neon API key | This period / project | `compute_time_seconds` ÷ 3600 from `GET /projects/{id}`; period and reset from `consumption_period_start`/`_end`. |
+| Neon | Network transfer | optional Neon API key | This period / project | `data_transfer_bytes` (public and private combined; the Free allowance counts public transfer only). |
+| Redis Cloud | Memory, connections, ops/s | nothing extra (`INFO` over the app's existing Redis connection) | Now / database | Live values. Redis Cloud answers `INFO` through its proxy and doesn't document every field[^redis-compat], so they're marked approximate. |
+| Redis Cloud | Evicted keys | nothing extra | Since Redis last restarted / database | Stays 0 with the default *no eviction* policy (writes fail instead when memory is full). |
+| Cloudflare R2 | Size and objects of `R2_BUCKET` and `R2_STAGING_BUCKET`; all buckets together | optional Cloudflare token | Now / bucket, account | Cloudflare's own storage samples (`r2StorageAdaptiveGroups`), no object listing.[^r2-metrics] |
+| Cloudflare R2 | Storage this month (GB-month) | optional Cloudflare token | This period / account | Estimate: average of each day's peak ÷ 30, as R2 bills it.[^r2-pricing] |
+| Cloudflare R2 | Class A and Class B operations | optional Cloudflare token | This period / account | `r2OperationsAdaptiveGroups` by action type, classified as on R2's pricing page; requests refused at authentication (401/403) aren't billed and aren't counted. |
+| Vercel | Data transfer, invocations, Active CPU, provisioned memory | **dashboard only** | | See below. |
+
+Neon's consumption endpoints (`/consumption_history/…`) need a paid plan[^neon-consumption]. The project and
+branch endpoints used here work on Free. The Redis Cloud REST API isn't used: only an account Owner can
+enable it, it needs an account key plus a user key, and it documents no connection, throughput or
+eviction figures for Essentials databases[^redis-api]. `INFO` over the connection we already hold gives all
+four figures.
+
+**Vercel is dashboard-only.** Vercel documents a billing API (`GET /v1/billing/charges`)[^vercel-billing], but
+every Vercel access token can both read and write. A token able to read the team's billing could also
+change deployments and environment variables[^vercel-tokens], which is far too much power for a
+dashboard. The page links to the Vercel dashboard instead (**Usage** in the sidebar). On Hobby, going
+over a limit pauses the project until 30 days have passed[^vercel-plans]; it isn't billed.
+
+**Quota scopes.** Neon's limits are per project. R2's free allowance is per Cloudflare account, so it
+includes the preview buckets (the "all buckets" and monthly figures are account-wide, while per-bucket
+sizes are only shown). Redis Cloud's limits are per database. Vercel's are per team/account.
+
+**Delays and approximations.**
+- Neon updates usage about every 15 minutes, and it can take up to an hour to appear. Its API notes
+  that these figures aren't meant for billing[^neon-limits].
+- Cloudflare doesn't document a delay. Its adaptive datasets are sampled at high volume[^cf-sampling], so
+  operation counts are estimates. Queries are limited to 31 days. "This month" is the calendar month in
+  UTC; Cloudflare doesn't say whether its monthly allowance uses the same boundaries.
+- Redis `INFO` is live. `used_memory` includes Redis's own overhead, while the plan limit counts the
+  dataset.
+- The dashboard adds up to `USAGE_CACHE_SECONDS` (15 minutes by default) on top of these delays.
+
+[^neon-calc]: https://neon.com/docs/introduction/usage-calculations
+[^neon-consumption]: https://neon.com/docs/reference/api/consumption
+[^neon-limits]: https://neon.com/docs/guides/consumption-limits
+[^redis-compat]: https://redis.io/docs/latest/operate/rs/references/compatibility/commands/server/
+[^redis-api]: https://redis.io/docs/latest/operate/rc/api/get-started/
+[^r2-metrics]: https://developers.cloudflare.com/r2/platform/metrics-analytics/
+[^r2-pricing]: https://developers.cloudflare.com/r2/pricing/
+[^cf-sampling]: https://developers.cloudflare.com/analytics/graphql-api/sampling/
+[^vercel-billing]: https://vercel.com/docs/rest-api/billing/list-focus-billing-charges
+[^vercel-tokens]: https://vercel.com/docs/accounts/access-tokens
+[^vercel-plans]: https://vercel.com/docs/plans/hobby
+
+### Optional monitoring credentials
+
+Both credentials are separate from the app's own (the R2 S3 token and the database URL are never reused
+for this). Both are secrets: add them in Vercel → Settings → Environment Variables, scoped to
+**Production** (and Preview if you want the dashboard there), marked **Sensitive**, or sync them from
+Doppler `prd`. Locally, run `doppler secrets set NAME`. Never write them to a file. Like every variable,
+they take effect on the **next deployment** (Deployments → ⋯ → Redeploy).
+
+**Cloudflare (R2 storage and operations)**, read-only:
+1. Cloudflare dashboard → **My Profile → API Tokens → Create Token → Create Custom Token**.
+2. Name `hexstory-usage-read`. Under **Permissions**, choose **Account** → **Account Analytics** →
+   **Read**, and nothing else. This is the only permission Cloudflare documents for account analytics
+   queries[^cf-token]. It reads all analytics of that account, and can't change anything.
+3. **Account Resources:** *Include* → only the account that holds the R2 buckets. Optional: Client IP
+   address filtering. Set a TTL if you rotate tokens.
+4. **Continue to summary → Create Token**, and copy it (it is shown once).
+5. Set `USAGE_CLOUDFLARE_API_TOKEN` to it. The account ID is taken from `R2_ENDPOINT`
+   (`https://<ACCOUNT_ID>.r2.cloudflarestorage.com`); set `USAGE_CLOUDFLARE_ACCOUNT_ID` only if your
+   endpoint is different.
+
+[^cf-token]: https://developers.cloudflare.com/analytics/graphql-api/getting-started/authentication/api-token-auth/
+
+**Neon (project storage, compute, transfer)**, optional, and a trade-off:
+Neon has **no read-only API key**. The narrowest is a *project-scoped* key, which can read and modify
+that one project (but not delete it or manage access)[^neon-keys]. The database size works without it. Add
+the key only if you accept that trade-off.
+1. Vercel → Storage → your database → **Open in Neon**. With the Vercel-managed integration the
+   organization is managed by Vercel; the Neon docs say the Console works as usual and that the CLI
+   needs an API key there[^neon-vercel]. They don't say explicitly whether these organizations can create
+   keys. If **API keys** isn't offered in the next step, leave these variables unset.
+2. Neon Console → organization **Settings → API keys → Create new**. Choose **Project-scoped**, select
+   the production project, name it `hexstory-usage-read`, and copy the key (shown once). Only
+   organization Admins can create project-scoped keys.
+3. Copy the **Project ID** (Project settings → General, e.g. `calm-sky-123456`).
+4. Set `USAGE_NEON_API_KEY` and `USAGE_NEON_PROJECT_ID`. Use the same project ID for Preview: the preview
+   database is a branch of the same project.
+
+[^neon-keys]: https://neon.com/docs/manage/api-keys
+[^neon-vercel]: https://neon.com/docs/guides/vercel-managed-integration
+
+**Redis Cloud** needs nothing extra: the dashboard sends one `INFO` over the existing command connection,
+with no `SCAN` or `KEYS`.
+
+### Limits and thresholds (optional, not secret)
+
+Set these from your **current** plan pages. The dashboard never assumes them. The figures in brackets
+were published on 2026-11-01, are given for orientation only, and change, so check before using them.
+GB and MB mean 10⁹ and 10⁶ bytes here. Providers don't say whether they mean decimal or binary units;
+decimal is the smaller reading, so warnings come slightly early.
+
+| Variable | Meaning | Kind shown | For orientation |
+|---|---|---|---|
+| `USAGE_LIMIT_NEON_STORAGE_GB` | Neon storage per project (logical size) | hard on Free, included if `USAGE_NEON_PLAN=paid` | Free: Neon's plans page[^neon-plans] (one older FAQ page states a different figure) |
+| `USAGE_LIMIT_NEON_COMPUTE_CU_HOURS` | CU-hours per project per month | same | Free: 100 |
+| `USAGE_LIMIT_NEON_TRANSFER_GB` | Network transfer per project per month | same | Free: 5 |
+| `USAGE_NEON_PLAN` | `free` (default) or `paid`: whether the Neon limits above are hard or billed | | |
+| `USAGE_LIMIT_REDIS_MEMORY_MB` | Database memory (else `INFO maxmemory` if Redis reports one) | hard | Essentials free: 30[^redis-plans] |
+| `USAGE_LIMIT_REDIS_CONNECTIONS` | Concurrent connections | hard | Essentials free: 30 |
+| `USAGE_LIMIT_REDIS_OPS_PER_SEC` | Operations per second | hard (throttled) | Essentials free: 100 |
+| `USAGE_LIMIT_R2_STORAGE_GB_MONTH` | R2 storage allowance per month (account) | included | 10[^r2-pricing] |
+| `USAGE_LIMIT_R2_CLASS_A_MONTH` | Class A operations per month (account) | included | 1000000 |
+| `USAGE_LIMIT_R2_CLASS_B_MONTH` | Class B operations per month (account) | included | 10000000 |
+| `USAGE_WARN_PERCENT`, `USAGE_CRITICAL_PERCENT` | Amber and red bar thresholds | | default 75 and 90 |
+| `USAGE_CACHE_SECONDS` | How long readings are reused (60–86400) | | default 900 |
+
+An invalid value never stops the site. It is ignored and listed at the top of the dashboard.
+Neon's API can also report a project *quota* that you set yourself in Neon. When one is set, it is
+shown as a hard limit and takes precedence over `USAGE_LIMIT_NEON_COMPUTE_CU_HOURS` and
+`USAGE_LIMIT_NEON_TRANSFER_GB`.
+
+[^neon-plans]: https://neon.com/docs/introduction/plans
+[^redis-plans]: https://redis.io/docs/latest/operate/rc/subscriptions/view-essentials-subscription/essentials-plan-details/
+
 ## 7. Environment variable reference
 
 "Set by" says who provides the value in a Vercel deployment. Locally everything comes from Doppler (`dev`).
@@ -340,6 +578,16 @@ flags, which contain no secrets.
 | `NODE_ENV` | existing | defaults to `production` on Vercel | no | |
 | `SKIP_DB_CHECK` | new | only in emergencies | no | `1` skips the build-time database check |
 | `VERCEL`, `VERCEL_ENV` | read | **Vercel system variables** | no | `VERCEL_ENV` = `production`/`preview` chooses which database marker is accepted |
+| `STRIPE_SUPPORT_URL`, `PAYPAL_SUPPORT_URL` | new | you (optional) | no (public links) | Support page links; validated, invalid ones ignored with a warning. Runtime config: redeploy after changing. See [Support page](#support-links) |
+| `USAGE_CLOUDFLARE_API_TOKEN` | new | you (optional) | **yes** | Monitoring token with only *Account Analytics: Read*, for R2 usage. Redeploy after changing. See [Resource usage](#resource-usage) |
+| `USAGE_CLOUDFLARE_ACCOUNT_ID` | new | you (optional) | no | Only if it can't be taken from `R2_ENDPOINT`. Redeploy after changing |
+| `USAGE_NEON_API_KEY` | new | you (optional) | **yes** | Project-scoped Neon API key for project storage/compute/transfer (Neon has no read-only key: see [Resource usage](#resource-usage)). Redeploy after changing |
+| `USAGE_NEON_PROJECT_ID` | new | you (optional) | no | Neon project ID for the key above |
+| `USAGE_NEON_PLAN` | new | you (optional) | no | `free` (default) or `paid`: Neon limits shown as hard or included |
+| `USAGE_LIMIT_NEON_STORAGE_GB`, `USAGE_LIMIT_NEON_COMPUTE_CU_HOURS`, `USAGE_LIMIT_NEON_TRANSFER_GB` | new | you (optional) | no | Neon allowances for the dashboard; unset = usage shown without a percentage. Redeploy after changing |
+| `USAGE_LIMIT_REDIS_MEMORY_MB`, `USAGE_LIMIT_REDIS_CONNECTIONS`, `USAGE_LIMIT_REDIS_OPS_PER_SEC` | new | you (optional) | no | Redis Cloud plan limits for the dashboard. Redeploy after changing |
+| `USAGE_LIMIT_R2_STORAGE_GB_MONTH`, `USAGE_LIMIT_R2_CLASS_A_MONTH`, `USAGE_LIMIT_R2_CLASS_B_MONTH` | new | you (optional) | no | R2 monthly allowances (account-wide) for the dashboard. Redeploy after changing |
+| `USAGE_WARN_PERCENT`, `USAGE_CRITICAL_PERCENT`, `USAGE_CACHE_SECONDS` | new | you (optional) | no | Dashboard thresholds (default 75 / 90) and cache time (default 900 s). Invalid values are ignored and listed on the dashboard |
 | `PORT`, `UPLOAD_DIR` | existing | not used on Vercel | no | Local server only |
 | `VITE_MAP_STYLE_URL`, `VITE_FEATURE_ADS` | existing | you, if needed | no (public, build-time) | Baked into the browser bundle |
 | `PG*`, `POSTGRES_*` | injected, unused | Neon integration | yes | Ignore |

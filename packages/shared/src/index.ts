@@ -6,3 +6,5 @@ export * from './schemas.js';
 export * from './types.js';
 export * from './square.js';
 export * from './rules.js';
+export * from './support.js';
+export * from './usage.js';

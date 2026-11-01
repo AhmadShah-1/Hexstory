@@ -19,4 +19,6 @@ export const LIMITS = {
   imageBytesMax: 6 * 1024 * 1024,
   imagesMax: 12,
   blocksMax: 400,
+  /** Stored size of one version's content (text, formatting, links, image references), UTF-8 bytes. */
+  contentBytesMax: 64 * 1024,
 } as const;

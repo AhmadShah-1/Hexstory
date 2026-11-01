@@ -1,7 +1,8 @@
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Link, useNavigate } from 'react-router';
-import { RULES } from '@hexstory/shared';
+import { LIMITS } from '@hexstory/shared';
+import { useRules } from '../api/queries';
 import { Modal } from '../components/Modal';
 import terms from '../../../../legal/terms-of-service.md?raw';
 import privacy from '../../../../legal/privacy-policy.md?raw';
@@ -11,12 +12,14 @@ const PAGES = { about, terms, privacy } as const;
 export type PageName = keyof typeof PAGES;
 
 /**
- * Fills `{{storiesPerDay.1}}`-style tokens from RULES, so the numbers on the page are the ones the API
- * enforces. Unknown tokens are left as they are, so a typo is visible rather than silently blank.
+ * Fills `{{storiesPerDay.1}}`-style tokens from the rules in force (`/api/rules`, which includes any
+ * Moderator changes) and `{{limits.bodyMax}}`-style ones from LIMITS, so the numbers on the page are
+ * the ones the API enforces. Unknown tokens are left as they are, so a typo is visible rather than
+ * silently blank.
  */
-function fillRules(text: string): string {
+function fillRules(text: string, source: object): string {
   return text.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (token, path: string) => {
-    let value: unknown = RULES;
+    let value: unknown = source;
     for (const key of path.split('.')) value = value && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined;
     return typeof value === 'number' || typeof value === 'string' ? String(value) : token;
   });
@@ -25,7 +28,8 @@ function fillRules(text: string): string {
 /** Long-form pages (About, Terms, Privacy) shown over the map. Markdown is rendered without raw HTML. */
 export function PageView({ page }: { page: PageName }) {
   const navigate = useNavigate();
-  const text = fillRules(PAGES[page]);
+  const rules = useRules().data;
+  const text = fillRules(PAGES[page], { ...rules, limits: { ...LIMITS, contentKilobytesMax: LIMITS.contentBytesMax / 1024, imageMegabytesMax: LIMITS.imageBytesMax / 1024 / 1024 } });
   const [, title, body] = text.match(/^# (.+)\n([\s\S]*)$/) ?? [null, page, text];
   return (
     <Modal open onClose={() => navigate('/')} title={title ?? ''}>

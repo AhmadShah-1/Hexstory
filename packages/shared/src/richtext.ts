@@ -64,7 +64,13 @@ export const richDocSchema = z
   .max(LIMITS.blocksMax)
   .refine((doc) => docImageKeys(doc).length <= LIMITS.imagesMax, `At most ${LIMITS.imagesMax} images per story`)
   .refine((doc) => docText(doc).length >= LIMITS.bodyMin, `Tell the story in at least ${LIMITS.bodyMin} characters`)
-  .refine((doc) => docText(doc).length <= LIMITS.bodyMax, `Keep the story under ${LIMITS.bodyMax.toLocaleString('en')} characters`);
+  .refine((doc) => docText(doc).length <= LIMITS.bodyMax, `Keep the story under ${LIMITS.bodyMax.toLocaleString('en')} characters`)
+  // Formatting and links count too: every saved version is a full copy, so this bounds what one edit can store.
+  .refine((doc) => docBytes(doc) <= LIMITS.contentBytesMax, 'This story is too large to save. Use fewer links or less formatting, or shorten it.');
+
+const encoder = new TextEncoder();
+/** Stored size of a document in UTF-8 bytes. */
+export const docBytes = (doc: RichDoc): number => encoder.encode(JSON.stringify(doc)).length;
 
 const inlineText = (content: Inline[]) => content.map((i) => (i.type === 'text' ? i.text : '\n')).join('');
 

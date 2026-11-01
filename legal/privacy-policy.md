@@ -39,6 +39,8 @@ Your email address is never shown publicly.
 
 - Infrastructure providers that host the Service (servers, storage), only to run it
 - Google, for sign-in
+- Stripe and PayPal, only if you choose to make a voluntary contribution from the Support page: you pay on
+  their own pages, under their privacy policies, and we don't receive or store your payment details
 - Authorities, when required by law or to protect someone's safety
 
 ## Retention

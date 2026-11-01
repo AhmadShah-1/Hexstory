@@ -28,13 +28,14 @@ const toMessage = (r: { id: string; cell: string; userId: string; displayName: s
  * Why a user can't post in the Square right now, or null if they can. The cooldown between
  * messages lives in shared state and is checked separately.
  */
-export function chatBlockReason(user: SessionUser | null): string | null {
+export function chatBlockReason(user: SessionUser | null, chatMinAccountMinutes: number): string | null {
   if (!user) return 'Sign in to join the conversation.';
   if (user.bannedAt) return 'Your account has been suspended.';
   if (!user.termsAcceptedAt) return 'Please accept the terms first.';
   const ageMs = Date.now() - user.createdAt.getTime();
-  if (user.trustLevel === TRUST.NEW && ageMs < POLICY.chatMinAccountAgeMs) {
-    const minutes = Math.ceil((POLICY.chatMinAccountAgeMs - ageMs) / 60_000);
+  const waitMs = chatMinAccountMinutes * 60_000;
+  if (user.trustLevel === TRUST.NEW && ageMs < waitMs) {
+    const minutes = Math.ceil((waitMs - ageMs) / 60_000);
     return `New accounts can post in the Square after a few minutes (${minutes} min left). You can read along meanwhile.`;
   }
   return null;

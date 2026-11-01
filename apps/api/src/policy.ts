@@ -1,4 +1,4 @@
-import { RULES, TRUST, type TrustLevel } from '@hexstory/shared';
+import { RULES, TRUST, type Rules, type TrustLevel } from '@hexstory/shared';
 
 /**
  * Anti-abuse policy in one place. Tune numbers here, or in `RULES` (packages/shared/src/rules.ts) for
@@ -17,10 +17,12 @@ export const POLICY = {
   socketEventsPer10s: 30,
   /** Minimum gap between chat messages from one user. */
   chatIntervalMs: 2_000,
-  chatMinAccountAgeMs: RULES.chatMinAccountMinutes * 60 * 1000,
   largeRemovalRatio: RULES.largeRemovalPercent / 100,
   newcomerMaxLinks: RULES.newcomerMaxLinks,
-  promotion: RULES.promotion,
+  uploadsPerDay: RULES.uploadsPerDay,
+  uploadMegabytesPerDay: RULES.uploadMegabytesPerDay,
+  // Promotion thresholds and the new-account chat wait can be changed by Moderators at runtime:
+  // read them with getRules() (services/settings.ts), never from RULES directly.
   /** Chat messages from the last this-many hours are removed live from open Squares when their author is banned. */
   banLiveHideHours: 24,
 } as const;
@@ -65,8 +67,9 @@ export function earnedTrustLevel(
   current: number,
   ageDays: number,
   contributions: { stories: number; othersStories: number },
+  promotion: Rules['promotion'],
 ): TrustLevel {
-  const { member, reviewer } = POLICY.promotion;
+  const { member, reviewer } = promotion;
   let level: number = current;
   if (
     level < TRUST.REVIEWER &&

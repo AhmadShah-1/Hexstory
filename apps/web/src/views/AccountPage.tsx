@@ -123,6 +123,8 @@ function Overview({ level, details }: { level: TrustLevel; details: NonNullable<
         <h3 className="section-label">Today</h3>
         <Progress label="Stories today" value={today.stories} max={today.storiesLimit} />
         <Progress label="Edits today" value={today.edits} max={today.editsLimit} />
+        <Progress label="Photo uploads today" value={today.uploads} max={today.uploadsLimit} />
+        <Progress label="Photo megabytes today" value={today.uploadMegabytes} max={today.uploadMegabytesLimit} />
         <p className="muted small">Counted over the last 24 hours. Limits grow with your level.</p>
       </section>
 

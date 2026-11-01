@@ -201,7 +201,16 @@ export interface UserProfile {
     progress: TrustProgress;
     /** Set when a moderator fixed their level; automatic promotion is paused. */
     trustLocked: boolean;
-    today: { stories: number; storiesLimit: number; edits: number; editsLimit: number };
+    today: {
+      stories: number;
+      storiesLimit: number;
+      edits: number;
+      editsLimit: number;
+      uploads: number;
+      uploadsLimit: number;
+      uploadMegabytes: number;
+      uploadMegabytesLimit: number;
+    };
   } | null;
   moderation: {
     banned: { at: string; reason: string | null } | null;

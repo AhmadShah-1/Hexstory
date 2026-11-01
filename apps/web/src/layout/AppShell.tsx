@@ -37,6 +37,7 @@ function FooterLinks() {
       <Link to="/about">About</Link>
       <Link to="/terms">Terms</Link>
       <Link to="/privacy">Privacy</Link>
+      <Link to="/support">Support</Link>
     </nav>
   );
 }

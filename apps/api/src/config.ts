@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { resolveSupportLinks } from '@hexstory/shared';
 
 /** Unset and empty both mean "not configured". */
 const unsetIfEmpty = <T extends z.ZodType>(type: T) => z.preprocess((v) => (v === '' ? undefined : v), type.optional());
@@ -39,6 +40,35 @@ const schema = z
       .string()
       .default('false')
       .transform((v) => v === 'true'),
+    /**
+     * Public links for the Support page (not secrets). Validated in the transform below: an invalid
+     * value hides that option and logs a warning instead of stopping the site.
+     */
+    STRIPE_SUPPORT_URL: optional,
+    PAYPAL_SUPPORT_URL: optional,
+    /**
+     * Moderators' resource usage dashboard (docs/DEPLOYMENT.md, "Resource usage dashboard"). All
+     * optional. Parsed and checked in usage/settings.ts: a bad value is reported on the dashboard
+     * and ignored, never stops the site. The two credentials are read-only monitoring secrets,
+     * separate from the app's own.
+     */
+    USAGE_CACHE_SECONDS: optional,
+    USAGE_WARN_PERCENT: optional,
+    USAGE_CRITICAL_PERCENT: optional,
+    USAGE_NEON_API_KEY: optional,
+    USAGE_NEON_PROJECT_ID: optional,
+    USAGE_NEON_PLAN: optional,
+    USAGE_LIMIT_NEON_STORAGE_GB: optional,
+    USAGE_LIMIT_NEON_COMPUTE_CU_HOURS: optional,
+    USAGE_LIMIT_NEON_TRANSFER_GB: optional,
+    USAGE_LIMIT_REDIS_MEMORY_MB: optional,
+    USAGE_LIMIT_REDIS_CONNECTIONS: optional,
+    USAGE_LIMIT_REDIS_OPS_PER_SEC: optional,
+    USAGE_CLOUDFLARE_API_TOKEN: optional,
+    USAGE_CLOUDFLARE_ACCOUNT_ID: optional,
+    USAGE_LIMIT_R2_STORAGE_GB_MONTH: optional,
+    USAGE_LIMIT_R2_CLASS_A_MONTH: optional,
+    USAGE_LIMIT_R2_CLASS_B_MONTH: optional,
     /** Set by Vercel on every deployment. */
     VERCEL: z.string().optional(),
     VERCEL_ENV: unsetIfEmpty(z.enum(['production', 'preview', 'development'])),
@@ -64,6 +94,8 @@ const schema = z
     /** Which database this deployment may use; must match the marker `npm run migrate` wrote. */
     DEPLOY_ENV: c.VERCEL_ENV ?? 'development',
     DB_POOL_MAX: c.DB_POOL_MAX ?? (c.VERCEL === '1' ? 5 : 10),
+    /** Validated Support page links (`links`) and why any configured value was ignored (`problems`). */
+    SUPPORT: resolveSupportLinks({ stripe: c.STRIPE_SUPPORT_URL, paypal: c.PAYPAL_SUPPORT_URL }),
   }));
 
 export type Config = z.infer<typeof schema>;

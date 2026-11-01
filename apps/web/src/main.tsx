@@ -37,6 +37,7 @@ const router = createBrowserRouter([
       { path: 'about', lazy: page('about') },
       { path: 'terms', lazy: page('terms') },
       { path: 'privacy', lazy: page('privacy') },
+      { path: 'support', lazy: async () => ({ Component: (await import('./views/SupportView')).SupportView }) },
       { path: '*', element: <NotFound /> },
     ],
   },

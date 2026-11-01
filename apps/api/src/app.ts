@@ -20,8 +20,11 @@ import { cellRoutes } from './routes/cells.js';
 import type { Deps } from './routes/deps.js';
 import { moderationRoutes } from './routes/moderation.js';
 import { sessionRoutes } from './routes/session.js';
+import { settingsRoutes } from './routes/settings.js';
 import { storyRoutes } from './routes/stories.js';
+import { supportRoutes } from './routes/support.js';
 import { uploadRoutes } from './routes/uploads.js';
+import { usageRoutes } from './routes/usage.js';
 import { userRoutes } from './routes/users.js';
 import type { Storage } from './storage/index.js';
 
@@ -58,7 +61,9 @@ export async function buildApp({
   const app = Fastify({
     logger: config.NODE_ENV === 'test' ? false : { level: config.NODE_ENV === 'production' ? 'info' : 'debug' },
     trustProxy: config.TRUST_PROXY,
-    bodyLimit: 512 * 1024,
+    // JSON bodies only (image originals go straight to storage). The largest legitimate one, a story
+    // with the maximum area, content and sources, is well under this.
+    bodyLimit: 256 * 1024,
   });
 
   await app.register(cookie);
@@ -135,6 +140,9 @@ export async function buildApp({
   await app.register(uploadRoutes(deps));
   await app.register(moderationRoutes(deps));
   await app.register(userRoutes(deps));
+  await app.register(usageRoutes({ config, sql, coordinator }));
+  await app.register(supportRoutes(deps));
+  await app.register(settingsRoutes(deps));
 
   // In production the API also serves the built web app; in development Vite does.
   const serveWeb = config.NODE_ENV === 'production' && existsSync(webRoot);

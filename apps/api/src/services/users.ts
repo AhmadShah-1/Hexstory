@@ -3,6 +3,7 @@ import type { SessionUser } from '../auth/sessions.js';
 import type { Db, Sql } from '../db.js';
 import { conflict } from '../errors.js';
 import { earnedTrustLevel } from '../policy.js';
+import { getRules } from './settings.js';
 
 export function toMe(user: SessionUser): Me {
   return {
@@ -34,7 +35,7 @@ export async function refreshTrust(sql: Sql, userId: string): Promise<void> {
     SELECT trust_level, trust_locked, created_at FROM users WHERE id = ${userId}`;
   if (!row || row.trustLocked || row.trustLevel >= TRUST.MODERATOR) return;
   const ageDays = (Date.now() - row.createdAt.getTime()) / 86_400_000;
-  const level = earnedTrustLevel(row.trustLevel, ageDays, await contributionCounts(sql, userId));
+  const level = earnedTrustLevel(row.trustLevel, ageDays, await contributionCounts(sql, userId), (await getRules(sql)).promotion);
   if (level !== row.trustLevel) {
     await sql`UPDATE users SET trust_level = ${level} WHERE id = ${userId} AND NOT trust_locked`;
   }

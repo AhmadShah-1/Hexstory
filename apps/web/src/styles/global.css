@@ -326,6 +326,19 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--f
 .prose table { border-collapse: collapse; font-size: 13.5px; margin-bottom: 12px; }
 .prose th, .prose td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
 
+/* Support page (views/SupportView.tsx) */
+.support h3 { font-size: 16px; margin: 18px 0 8px; }
+.support h4 { font-size: 15px; margin: 0 0 4px; }
+.prose .support-options { list-style: none; padding: 0; margin: 0 0 14px; display: grid; gap: 10px; }
+.support-option { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--surface-2); }
+.support-option p { margin: 0 0 10px; font-size: 14px; }
+.support-option .button { white-space: normal; text-align: center; }
+@media (max-width: 720px) { .support-option .button { width: 100%; } }
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
 /* ---------- Toast & ads ---------- */
 .toast-region { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 50; pointer-events: none; }
 .toast { background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 10px; box-shadow: var(--shadow); font-size: 14px; max-width: calc(100vw - 32px); }
@@ -420,3 +433,44 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--f
 .stretch-link::after { content: ''; position: absolute; inset: 0; }
 .stretch .above { position: relative; z-index: 1; }
 .prose table { display: block; max-width: 100%; overflow-x: auto; }
+
+/* ---- Moderation settings ---- */
+.mod-settings-group { border: 0; padding: 0; margin: 18px 0 4px; min-width: 0; }
+.mod-settings-number { width: 7em; }
+/* Five Moderation tabs don't fit a phone: let the tab row scroll sideways instead of the page. */
+.tabs { overflow-x: auto; scrollbar-width: none; }
+.tabs button { flex-shrink: 0; }
+
+/* ---- Resource usage ---- */
+.usage-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.usage-toolbar p { min-width: 0; }
+.usage-toolbar .button { flex-shrink: 0; }
+.usage-refresh-error { margin: -4px 0 12px; }
+.usage-problems { background: #fef3c7; color: #92400e; border-radius: var(--radius-sm); padding: 8px 12px; margin-bottom: 12px; }
+.usage-problems ul { margin: 4px 0 0; padding-left: 18px; }
+.usage-card { padding: 14px 16px; }
+.usage-card-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin-bottom: 4px; }
+.usage-card-head h3 { font-size: 16px; }
+.usage-group { margin-top: 10px; }
+.usage-group h4 { margin: 0 0 6px; font-size: 12px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; }
+.usage-group h4 .muted { font-weight: 400; letter-spacing: 0; text-transform: none; }
+.usage-list { list-style: none; margin: 0; padding: 0; }
+.usage-metric { padding: 8px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.usage-metric:first-child { border-top: 0; padding-top: 2px; }
+.usage-metric p { margin-top: 2px; }
+.usage-metric-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.usage-label { font-size: 14px; min-width: 0; }
+.usage-value { font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-status { margin-left: 0; flex-shrink: 0; }
+.usage-bar { height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; margin: 6px 0 2px; }
+.usage-bar > div { height: 100%; border-radius: inherit; background: var(--ok); }
+.usage-bar.usage-warning > div { background: #d97706; }
+.usage-bar.usage-critical > div { background: var(--danger); }
+.usage-limit { font-variant-numeric: tabular-nums; }
+.usage-kind { margin-left: 2px; }
+.usage-stale { margin: 4px 0 0; }
+.usage-source { font-size: 12px; }
+.usage-missing { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.usage-missing p { flex-basis: 100%; }
+.usage-checked { margin-top: 8px; }
+.usage-legend { margin-top: 4px; }

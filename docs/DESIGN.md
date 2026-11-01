@@ -153,8 +153,10 @@ in [DEPLOYMENT.md §7](DEPLOYMENT.md#7-environment-variable-reference). The impo
 | `R2_ENDPOINT`, `R2_BUCKET`, `R2_STAGING_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_PUBLIC_BASE_URL` | with `r2` | See DEPLOYMENT.md §3 |
 | `REDIS_URL` | on Vercel | Shared chat fan-out, presence, cooldowns and rate limits. Optional locally |
 | `DB_POOL_MAX` | no | Connections per process (default 10; 5 on Vercel) |
+| `USAGE_*` | no | Moderators' resource usage dashboard: optional monitoring credentials (`USAGE_CLOUDFLARE_API_TOKEN`, `USAGE_NEON_API_KEY` + `USAGE_NEON_PROJECT_ID`), `USAGE_LIMIT_*` allowances (never assumed), thresholds and cache time. See [DEPLOYMENT.md, Resource usage dashboard](DEPLOYMENT.md#resource-usage) |
 | `TRUST_PROXY` | no | `true` when behind a proxy that overwrites `X-Forwarded-For` (default `true` on Vercel) |
 | `PORT`, `NODE_ENV`, `UPLOAD_DIR` | no | Local server settings (`NODE_ENV` defaults to `production` on Vercel) |
+| `STRIPE_SUPPORT_URL`, `PAYPAL_SUPPORT_URL` | no (public, runtime) | Support page links (Stripe Payment Link on `buy.stripe.com`; PayPal.Me on `www.paypal.com/paypalme/…` or `paypal.me`). Validated at startup; an invalid value hides that option and logs a warning. Redeploy on Vercel after changing. See [DEPLOYMENT.md](DEPLOYMENT.md#support-links) |
 | `VITE_MAP_STYLE_URL` | no (build-time) | Alternative MapLibre style; also add its origin to `MAP_ORIGINS` in `apps/api/src/app.ts` (CSP) |
 | `VITE_FEATURE_ADS` | no (build-time) | `true` renders ad slots (see Extension points) |
 
@@ -264,6 +266,8 @@ Browser ── React SPA ────┼── pages, /api, /auth ─┐
 | `reports` | User reports on stories, revisions, comments or users |
 | `mod_actions` | Append-only audit log of every moderation action, with optional `details` (jsonb) |
 | `ban_requests` | Reviewers asking Moderators to ban someone; resolved as banned/declined/deleted (migration 004) |
+| `site_settings` | Runtime settings Moderators change, e.g. `rules` overrides (migration 005) |
+| `uploads` | One row per photo upload slot: declared original size, stored WebP size; daily quotas (migration 005) |
 | `app_meta` | Facts about the database itself; `environment` = which deployment environment owns it (migration 003) |
 | `schema_migrations` | Applied migration files |
 
@@ -290,12 +294,25 @@ The numbers users see (daily limits, promotion thresholds, held-edit thresholds,
 the rest are in `apps/api/src/policy.ts`. Change them there and update this section. The About page explains
 all of this to users (`apps/web/src/content/about.md`, with `{{…}}` tokens filled from `RULES`).
 
+Thresholds below are the defaults; Moderators can change them (see "Rules Moderators can change").
+
 | Level | Name | How you get it | What changes |
 |---|---|---|---|
 | 0 | Newcomer | Sign in + accept terms | New stories are **private until a Reviewer approves them** (only you and Reviewers see them; you can keep editing them meanwhile). Edits to other people's stories are **held for review** |
 | 1 | Member | Account ≥ 3 days **and** accepted contributions on ≥ 3 distinct *published* stories | Stories and edits go live immediately (unless auto-flagged or the story is protected) |
 | 2 | Reviewer | Account ≥ 30 days, ≥ 25 distinct published stories, **≥ 15 of them started by someone else** | Watchtower: approve new stories, accept/reject held edits, restore or remove versions, hide stories and chat messages, resolve reports, **ask Moderators to ban someone**; see anyone's contributions |
 | 3 | Moderator | Email in `ADMIN_EMAILS` | Everything above + Moderation screen: ban (keeping or removing posts), unban, set levels, delete accounts, decline ban requests, read the audit log; protect and unhide stories, put back removed versions |
+
+**Rules Moderators can change** (Moderation → Settings, no deploy): the Member and Reviewer promotion
+thresholds (days since joining — i.e. how long the Newcomer period lasts — and published-story counts) and
+the minutes a new account waits before chatting. They are stored as overrides in `site_settings` (key
+`rules`), validated by `editableRulesSchema` (whole numbers; Reviewer requirements ≥ Member ones), merged
+over the code defaults by `effectiveRules()`, served publicly at `GET /api/rules` (the About page uses it)
+and cached per instance for 30 s (`services/settings.ts`), so every Vercel instance applies a change within
+a minute. Nobody is re-evaluated on the spot: promotion is re-checked at each person's next accepted
+contribution or sign-in; lowering a requirement never demotes, and levels set by hand are untouched. Every
+change is in the audit log (`settings:rules`, with before/after values). Daily limits and size limits stay
+in code on purpose: they protect hosting costs.
 
 Promotion is automatic and counts *distinct published stories*, so repeatedly editing your own story, or
 writing drafts nobody approved, cannot farm trust (tested). It never demotes.
@@ -331,8 +348,15 @@ Moderators can't ban, delete or re-level other Moderators or themselves.
 8. **Removed versions.** A Reviewer can remove a version from the history (`story_revisions.hidden_at`), e.g.
    one that exposed someone's address: it is then visible to Reviewers only and can never be restored. The
    current version can't be removed (restore an earlier one first). Only Moderators can put one back.
-9. **Daily limits** per trust level (stories 3/10/100/1000, edits 10/20/300/5000, reports 30), enforced inside
-   the write transaction under a per-user advisory lock so parallel requests can't exceed them.
+9. **Daily limits** per trust level (stories 3/10/100/1000, edits 10/20/300/5000, photo uploads
+   10/30/100/300 and 20/80/250/1000 MB of originals, reports 30), enforced inside the write transaction under
+   a per-user advisory lock so parallel requests can't exceed them. Photo uploads also keep the hourly limit
+   (20/hour); every upload slot counts, completed or not, because an abandoned original still sat in staging.
+   **Size limits** bound what one troll can store: story text 10,000 characters, ≤ 12 photos, ≤ 20 sources,
+   and at most 64 KB of stored content per version (`LIMITS.contentBytesMax`, so heavy formatting or hundreds
+   of long links can't inflate it; every edit stores a full copy); JSON request bodies ≤ 256 KB; image
+   originals ≤ 6 MB, re-encoded to ≤ 1600 px WebP. Worst case per Member per day: 20 edits × 64 KB of text
+   and 80 MB of photo originals (published WebP is much smaller).
 10. **Reports** from any signed-in user, about a story, a version, a chat message or a person (once per item
     while open), go to the Watchtower. Hiding a message, removing a version or banning a user closes the
     reports about it.
@@ -455,9 +479,19 @@ failed. Two Redis connections per instance (commands + subscriber).
   today's usage against the daily limits, your stories and edits with their status (Live, Waiting for review,
   Not accepted, Removed, Story waiting for approval), name, sign out, delete. **User pages** (`/u/:id`): name,
   role, join date and Report for everyone; contributions and moderation tools for Reviewers/Moderators.
-- **Moderation** (`/moderation`, Moderators): Ban requests, Users (search, level and status filters) and Audit
-  log tabs. Bans and deletions open a dialog with an explicit "keep posts" / "remove posts" choice that spells
+- **Moderation** (`/moderation`, Moderators): Ban requests, Users (search, level and status filters), Audit
+  log, Settings (editable rules) and Resource usage tabs; the tab row scrolls sideways on phones. Bans and deletions open a dialog with an explicit "keep posts" / "remove posts" choice that spells
   out what removal does. On phones, Moderators' brand pill shrinks to the logo so the staff buttons fit.
+- **Support** (`/support`, footer link): a modal page asking for voluntary contributions, with "Support with
+  card" (Stripe Payment Link) and "Support with PayPal" buttons, each an ordinary link to the provider's page
+  and hidden when its URL isn't configured or fails validation (exact host allowlist, `packages/shared/src/support.ts`).
+  Contributions buy nothing; no payment data, SDKs or webhooks touch Hexstory.
+- **Resource usage** (Moderators): per-provider cards separating "Now" (capacity) from "This period"
+  (cumulative), each metric with scope, source, whether it is our own measurement or provider data, freshness,
+  and a percentage only when a comparable allowance is known (warnings at 75 % / 90 %). Readings are cached
+  in Redis for 15 min, refresh is limited to once a minute site-wide, providers are fetched independently with
+  4 s timeouts, and the last good reading is kept and marked stale. Details: DEPLOYMENT.md "Resource usage
+  dashboard" (`apps/api/src/usage/`).
 - **Required legal text in the UI:** the Welcome checkbox, the disclaimer under every story, the licence
   notice in the editor, the "Messages are public. Be kind." chat placeholder, and About · Terms · Privacy links
   bottom-left.
@@ -472,10 +506,11 @@ failed. Two Redis connections per instance (commands + subscriber).
 | `/s/:id/edit`, `/new?cell=` | Editor (lazy-loaded) |
 | `/s/:id/versions`, `/v/:revisionId` | Versions list, single version with word diff and review actions |
 | `/watchtower` | Review queue (Reviewers): pending edits, new stories, reports |
-| `/moderation` (`?tab=requests|users|log`) | Moderators: ban requests, users, audit log |
+| `/moderation` (`?tab=requests|users|log|settings|usage`) | Moderators: ban requests, users, audit log, editable rules, resource usage |
 | `/me` (`?tab=overview|stories|edits`) | Your account: role, progress, limits, contributions, name, delete |
 | `/u/:id` | Someone's page; contributions and moderation tools for Reviewers/Moderators |
 | `/about`, `/terms`, `/privacy` | Modal pages (markdown) |
+| `/support` | Modal page: voluntary contributions via Stripe Payment Link / PayPal.Me (options from `GET /api/support`) |
 
 ## 10. API reference
 
@@ -484,6 +519,7 @@ All JSON. Errors are `{ error: code, message }`, and `message` is always safe to
 | Method & path | Who | Purpose |
 |---|---|---|
 | `GET /api/session` | anyone | `{ user, signInEnabled }` |
+| `GET /api/support` | anyone | `{ stripe: string \| null, paypal: string \| null }` validated Support page links (`Cache-Control: max-age=300`) |
 | `PATCH /api/me` | signed in | `{ displayName?, acceptTerms? }` |
 | `DELETE /api/me` | signed in | Delete account (anonymise) |
 | `GET /auth/google?returnTo=`, `GET /auth/google/callback`, `POST /auth/logout` | | Sign-in flow |
@@ -499,7 +535,7 @@ All JSON. Errors are `{ error: code, message }`, and `message` is always safe to
 | `POST /api/stories/:id/restore` | reviewer | `{ revisionId }` |
 | `POST /api/stories/:id/status` | reviewer | `{ status: active|hidden, revisionId?, reason? }` approve/hide (unhide: moderator) |
 | `POST /api/stories/:id/protection` | moderator | `{ level: 0..3 }` |
-| `POST /api/uploads` | writer | `{ size }` → `{ id, upload: { url, method: 'PUT', headers } }` (20/hour) |
+| `POST /api/uploads` | writer | `{ size }` → `{ id, upload: { url, method: 'PUT', headers } }` (20/hour, plus the daily quota) |
 | `PUT <upload.url>` | browser | The original's bytes. Pre-signed R2 URL in production; locally `PUT /api/uploads/:id/original` |
 | `POST /api/uploads/:id/complete` | writer (same user) | Validate, re-encode, publish → `{ imageKey, imageUrl, thumbUrl }` |
 | `POST /api/reports` | writer | `{ targetType, targetId, reason, details? }` |
@@ -516,6 +552,10 @@ All JSON. Errors are `{ error: code, message }`, and `message` is always safe to
 | `GET /api/moderation/users` | moderator | `?q=&level=&filter=all|banned|requested|reported&offset=` |
 | `GET /api/moderation/ban-requests` | moderator | Users with open ban requests |
 | `GET /api/moderation/log` | moderator | Audit log `?action=&actorId=&targetType=&targetId=&offset=` |
+| `GET /api/moderation/usage` | moderator | Hosting usage per provider (`UsageReport`, `packages/shared/src/usage.ts`); readings cached ~15 min across instances |
+| `POST /api/moderation/usage/refresh` | moderator | Re-read every provider now; once a minute site-wide (429 + `Retry-After` otherwise) |
+| `GET /api/rules` | anyone | The rules in force (defaults + Moderator overrides) |
+| `GET`, `PUT /api/moderation/settings` | moderator | `{ rules: EditableRules, reason? }` |
 | Socket.IO `join` (acked), `leave`, `send` (ack `{ok, delayed?}`) → `message`, `presence`, `hidden`, `resync` | | The Square |
 
 "Writer" = signed in, terms accepted, not banned.
@@ -597,6 +637,17 @@ Designed so features can be added without touching unrelated code:
 
 ## Changelog
 
+- **2026-11-01**: Support page (`/support`, `GET /api/support`; `STRIPE_SUPPORT_URL`, `PAYPAL_SUPPORT_URL`
+  validated against exact provider hosts, invalid values hidden with a startup warning) and a moderator-only
+  Resource usage dashboard (`/api/moderation/usage`, `/refresh`): Neon database size and Redis INFO from our
+  own connections; Neon project usage and R2 storage/operations via optional read credentials; Vercel
+  dashboard-only. Optional `USAGE_*` settings for allowances and thresholds; the coordinator gained `info()`
+  and a shared JSON cache. Privacy Policy mentions Stripe/PayPal.
+- **2026-11-01**: Moderators can change the promotion thresholds (Newcomer period, Member/Reviewer day and
+  story requirements) and the new-account chat wait at runtime (Moderation → Settings; `site_settings`,
+  `GET /api/rules`, audit `settings:rules`); the About page shows the live values. Cost guards: 64 KB cap on
+  a version's stored content, 256 KB JSON body limit (was 512 KB), daily photo-upload quotas by count and
+  size per trust level (`uploads` table). Migration `005_settings_uploads.sql`.
 - **2026-11-01**: Moderation and accounts. Newcomer stories are private until a Reviewer approves them
   (approval checks the version read; accepting a held first version publishes); only published stories count
   toward promotion. Member daily limits lowered to 10 stories / 20 edits. Contribution rules moved to shared

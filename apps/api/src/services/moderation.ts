@@ -15,6 +15,7 @@ import type { Db, Sql } from '../db.js';
 import { conflict, forbidden, notFound } from '../errors.js';
 import { POLICY, canReview, nextEarnedLevel } from '../policy.js';
 import { logModAction } from './modlog.js';
+import { getRules } from './settings.js';
 import { closeReportsAbout, copyToNewRevision, fetchStory, invalidateCellCounts } from './stories.js';
 import { anonymizeUser, contributionCounts, refreshTrust } from './users.js';
 
@@ -78,7 +79,7 @@ export async function getUserProfile(sql: Sql, viewer: SessionUser | null, userI
 
   const [stats] = await sql<
     { storiesStarted: number; storiesLive: number; edits: number; editsLive: number; editsWaiting: number; editsRejected: number;
-      messages: number; storiesToday: number; editsToday: number }[]
+      messages: number; storiesToday: number; editsToday: number; uploadsToday: number; uploadBytesToday: number }[]
   >`
     SELECT
       (SELECT count(*)::int FROM stories WHERE created_by = ${userId}) AS stories_started,
@@ -89,11 +90,14 @@ export async function getUserProfile(sql: Sql, viewer: SessionUser | null, userI
       (SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId} AND status = 'rejected') AS edits_rejected,
       (SELECT count(*)::int FROM comments WHERE user_id = ${userId} AND hidden_at IS NULL) AS messages,
       (SELECT count(*)::int FROM stories WHERE created_by = ${userId} AND created_at > now() - interval '1 day') AS stories_today,
-      (SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId} AND created_at > now() - interval '1 day') AS edits_today`;
-  const { storiesToday, editsToday, ...counts } = stats!;
+      (SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId} AND created_at > now() - interval '1 day') AS edits_today,
+      (SELECT count(*)::int FROM uploads WHERE user_id = ${userId} AND created_at > now() - interval '1 day') AS uploads_today,
+      (SELECT COALESCE(sum(declared_bytes), 0)::float8 FROM uploads WHERE user_id = ${userId} AND created_at > now() - interval '1 day') AS upload_bytes_today`;
+  const { storiesToday, editsToday, uploadsToday, uploadBytesToday, ...counts } = stats!;
   const progress = await contributionCounts(sql, userId);
   const next = u.trustLocked ? null : nextEarnedLevel(u.trustLevel);
-  const rule = next === TRUST.MEMBER ? POLICY.promotion.member : POLICY.promotion.reviewer;
+  const { promotion } = await getRules(sql);
+  const rule = next === TRUST.MEMBER ? promotion.member : promotion.reviewer;
   profile.details = {
     stats: counts,
     progress: {
@@ -107,6 +111,10 @@ export async function getUserProfile(sql: Sql, viewer: SessionUser | null, userI
       storiesLimit: POLICY.storiesPerDay[u.trustLevel],
       edits: editsToday,
       editsLimit: POLICY.editsPerDay[u.trustLevel],
+      uploads: uploadsToday,
+      uploadsLimit: POLICY.uploadsPerDay[u.trustLevel],
+      uploadMegabytes: Math.round((uploadBytesToday / 1024 / 1024) * 10) / 10,
+      uploadMegabytesLimit: POLICY.uploadMegabytesPerDay[u.trustLevel],
     },
   };
 
@@ -420,6 +428,7 @@ export async function auditLog(
              WHEN 'comment' THEN (SELECT left(c.body, 140) FROM comments c WHERE c.id::text = m.target_id)
              WHEN 'user' THEN (SELECT u.display_name FROM users u WHERE u.id::text = m.target_id)
              WHEN 'report' THEN (SELECT rp.target_type || ' reported for ' || rp.reason FROM reports rp WHERE rp.id::text = m.target_id)
+             WHEN 'settings' THEN 'Site rules'
            END AS label,
            CASE m.target_type
              WHEN 'story' THEN m.target_id

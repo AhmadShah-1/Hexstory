@@ -6,6 +6,7 @@ import { LIMITS, uploadIntentSchema, type UploadTicket, type UploadedImage } fro
 import { HttpError, badRequest, notFound } from '../errors.js';
 import { parse, requireWriter } from '../http.js';
 import { POLICY } from '../policy.js';
+import { recordStoredUpload, reserveUpload } from '../services/uploads.js';
 import { imageFileNames, stagedKey } from '../storage/index.js';
 import type { Deps } from './deps.js';
 
@@ -25,7 +26,7 @@ const idParams = z.object({ id: z.uuid() });
  * Originals are never public.
  */
 export const uploadRoutes =
-  ({ storage }: Deps): FastifyPluginAsync =>
+  ({ sql, storage }: Deps): FastifyPluginAsync =>
   async (app) => {
     const perUser = (max: number) => ({
       rateLimit: { max, timeWindow: '1 hour', keyGenerator: (req: FastifyRequest) => req.user?.id ?? req.ip },
@@ -35,6 +36,8 @@ export const uploadRoutes =
       const user = requireWriter(req);
       const { size } = parse(uploadIntentSchema, req.body);
       const id = randomUUID();
+      // Daily quota per user (count and size), on top of the hourly rate limit.
+      await reserveUpload(sql, user, id, size);
       const ticket: UploadTicket = { id, upload: await storage.stagingTarget(stagedKey(user.id, id), size) };
       return reply.code(201).send(ticket);
     });
@@ -87,6 +90,7 @@ export const uploadRoutes =
         throw new HttpError(502, 'storage', 'The image could not be saved. Please try again.');
       }
       await discardOriginal();
+      await recordStoredUpload(sql, user.id, id, full.length + thumb.length);
 
       const result: UploadedImage = {
         imageKey: id,

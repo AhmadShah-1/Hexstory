@@ -28,8 +28,8 @@ contributions are accepted. You can see your role and how close you are to the n
   turn down edits that are waiting, restore or remove versions, hide harmful stories and messages, and handle
   reports.
 - **Moderator**: appointed by the people who run Hexstory. Moderators can do everything reviewers can, and can
-  also ban people, change someone's role, protect stories that keep being vandalised, and read the log of
-  every moderation action.
+  also ban people, change someone's role, protect stories that keep being vandalised, adjust the waiting
+  periods and thresholds on this page, and read the log of every moderation action.
 
 Only **published** stories count toward promotion, and each story counts once however many times you edit it.
 A moderator can also set someone's role by hand; automatic promotion is then paused for them.
@@ -54,6 +54,13 @@ To keep things calm, everyone has a daily limit, counted over the last 24 hours.
 |---|---|---|---|---|
 | New stories | {{storiesPerDay.0}} | {{storiesPerDay.1}} | {{storiesPerDay.2}} | {{storiesPerDay.3}} |
 | Edits | {{editsPerDay.0}} | {{editsPerDay.1}} | {{editsPerDay.2}} | {{editsPerDay.3}} |
+| Photo uploads | {{uploadsPerDay.0}} | {{uploadsPerDay.1}} | {{uploadsPerDay.2}} | {{uploadsPerDay.3}} |
+| Photo megabytes | {{uploadMegabytesPerDay.0}} MB | {{uploadMegabytesPerDay.1}} MB | {{uploadMegabytesPerDay.2}} MB | {{uploadMegabytesPerDay.3}} MB |
+
+A story can be up to {{limits.bodyMax}} characters long with up to {{limits.imagesMax}} photos (each under
+{{limits.imageMegabytesMax}} MB) and {{limits.sourcesMax}} sources. Very heavy formatting or hundreds of links can
+also make a story too large to save ({{limits.contentKilobytesMax}} KB of stored content), because every
+version is kept.
 
 ## Reports and bans
 

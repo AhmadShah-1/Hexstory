@@ -132,7 +132,7 @@ export const userRoutes =
       const query = parse(
         offsetQuery.extend({
           actorId: z.uuid().optional(),
-          targetType: z.enum(['story', 'revision', 'comment', 'user', 'report']).optional(),
+          targetType: z.enum(['story', 'revision', 'comment', 'user', 'report', 'settings']).optional(),
           targetId: z.string().max(64).optional(),
           action: z.string().regex(/^[a-z:-]{1,40}$/).optional(),
         }),

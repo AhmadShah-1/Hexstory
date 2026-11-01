@@ -3,11 +3,13 @@ import { Link, useSearchParams } from 'react-router';
 import { TRUST, TRUST_NAMES, type AuditEntry, type BanRequestGroup, type ModUserRow, type TrustLevel } from '@hexstory/shared';
 import { errorMessage } from '../api/client';
 import { useAuditLog, useBanRequests, useModUsers, useSession, type AuditFilters, type ModUserFilters } from '../api/queries';
+import { ModSettings, describeRuleChanges } from '../components/ModSettings';
 import { Panel } from '../components/Panel';
+import { ResourceUsage } from '../components/ResourceUsage';
 import { BanDialog, DeclineRequestsButton, describeCleanup } from '../components/UserModTools';
 import { shortDate, timeAgo } from '../lib/format';
 
-const TABS = { requests: 'Ban requests', users: 'Users', log: 'Audit log' } as const;
+const TABS = { requests: 'Ban requests', users: 'Users', log: 'Audit log', settings: 'Settings', usage: 'Resource usage' } as const;
 type Tab = keyof typeof TABS;
 
 /** Moderators: ban requests, all users, the audit log. Tab and filters live in the URL. */
@@ -17,7 +19,7 @@ export function Moderation() {
   const requests = useBanRequests(isModerator);
   const [params, setParams] = useSearchParams();
   const tabParam = params.get('tab');
-  const tab: Tab = tabParam === 'users' || tabParam === 'log' ? tabParam : 'requests';
+  const tab: Tab = tabParam && tabParam in TABS ? (tabParam as Tab) : 'requests';
 
   if (session.isLoading) return <Panel title="Moderation"><p className="muted pad">Loading…</p></Panel>;
   if (!isModerator) {
@@ -46,6 +48,8 @@ export function Moderation() {
         )}
         {tab === 'users' && <UsersTab />}
         {tab === 'log' && <LogTab />}
+        {tab === 'settings' && <ModSettings />}
+        {tab === 'usage' && <ResourceUsage />}
       </div>
     </Panel>
   );
@@ -194,6 +198,7 @@ const ACTION_FILTERS: [string, string][] = [
   ['unban', 'Unbans'],
   ['trust', 'Level changes'],
   ['delete-user', 'Account deletions'],
+  ['settings', 'Rule changes'],
 ];
 
 const PROTECTION_NAMES: Record<string, string> = { 0: 'Members', 1: 'Members', 2: 'Reviewers only', 3: 'Moderators only' };
@@ -203,6 +208,7 @@ function describeAction(e: AuditEntry): string {
   const [code, arg] = e.action.split(':') as [string, string | undefined];
   const removed = e.details?.removeContent ? ' and removed their posts' : '';
   switch (code) {
+    case 'settings': return 'changed the site rules';
     case 'accept': return 'accepted an edit';
     case 'reject': return 'rejected an edit';
     case 'approve': return 'approved and published a story';
@@ -310,7 +316,7 @@ function LogEntry({ entry: e }: { entry: AuditEntry }) {
   const link = targetLink(e);
   const label = e.target.label ?? '(deleted)';
   const isCleanup = e.action === 'ban' || e.action === 'ban:clean-up' || e.action === 'delete-user';
-  const summary = isCleanup ? describeCleanup(e.details) : '';
+  const summary = isCleanup ? describeCleanup(e.details) : e.action === 'settings:rules' ? describeRuleChanges(e.details) : '';
   // Newer entries keep the restored version in details; older ones put its id in the reason.
   const fromDetails = typeof e.details?.revisionId === 'string' ? e.details.revisionId : null;
   const restoredVersion = e.action === 'restore' ? (fromDetails ?? (e.reason && UUID.test(e.reason) ? e.reason : null)) : null;
