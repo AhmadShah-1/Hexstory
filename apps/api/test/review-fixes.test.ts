@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { io as connect } from 'socket.io-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { TRUST, cellAt, type Page, type AuditEntry, type ContributionStory, type RevisionListItem, type StoryDetail, type UserProfile } from '@hexstory/shared';
@@ -28,37 +27,6 @@ const edit = async (headers: Headers, storyId: string, overrides: Parameters<typ
   const base = (await get<StoryDetail>(`/api/stories/${storyId}`, headers)).body.revision.id;
   return ctx.app.inject({ method: 'PUT', url: `/api/stories/${storyId}`, headers, payload: { ...storyInput(overrides), baseRevisionId: base } });
 };
-
-describe('the Square', () => {
-  it('survives a malformed session cookie instead of crashing the process', async () => {
-    const bad = connect(url, { path: '/socket.io', transports: ['websocket'], extraHeaders: { cookie: 'hx_session=%E0%A4%A', origin: ORIGIN } });
-    await new Promise<void>((resolve, reject) => {
-      bad.once('connect', resolve);
-      bad.once('connect_error', reject);
-    });
-    const joined = await new Promise<boolean>((resolve) => {
-      bad.emit('join', cellAt(48.85, 2.35, 5), () => resolve(true));
-      setTimeout(() => resolve(false), 2000);
-    });
-    expect(joined).toBe(true);
-    bad.close();
-    // The server is still up.
-    expect((await fetch(`${url}/api/session`)).status).toBe(200);
-  });
-
-  it('limits how many connections one address can hold', async () => {
-    const sockets = Array.from({ length: POLICY.socketConnectionsPerIp + 3 }, () =>
-      connect(url, { path: '/socket.io', transports: ['websocket'], reconnection: false, extraHeaders: { origin: ORIGIN } }));
-    // Refused connections either fail to connect or are closed straight away.
-    const results = await Promise.all(sockets.map((s) => new Promise<boolean>((resolve) => {
-      s.once('connect_error', () => resolve(false));
-      s.once('disconnect', () => resolve(false));
-      setTimeout(() => resolve(s.connected), 1500);
-    })));
-    expect(results.filter(Boolean)).toHaveLength(POLICY.socketConnectionsPerIp);
-    sockets.forEach((s) => s.close());
-  });
-});
 
 describe('publication', () => {
   it("keeps a newcomer's drafts private after the story is approved", async () => {

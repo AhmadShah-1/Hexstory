@@ -141,7 +141,9 @@ describe('user pages and contributions', () => {
     const self = (await get<UserProfile>(`/api/users/${author.id}`, author.headers)).body;
     expect(self.details?.stats).toMatchObject({ storiesStarted: 1, storiesLive: 0, edits: 1 });
     expect(self.details?.today).toMatchObject({ stories: 1, storiesLimit: RULES.storiesPerDay[0], editsLimit: RULES.editsPerDay[0] });
-    expect(self.details?.progress.next).toMatchObject({ level: TRUST.MEMBER, minStories: RULES.promotion.member.minStories });
+    expect(self.details?.progress.next).toMatchObject({ level: TRUST.MEMBER, minReputation: RULES.promotion.member.minReputation });
+    // Nothing published yet: the accepted first version only counts as a week of activity.
+    expect(self.details?.progress).toMatchObject({ reputation: 1, breakdown: { publishedStories: 0, activeWeeks: 1 } });
     expect(self.moderation).toBeNull();
     expect((await get<UserProfile>(`/api/users/${author.id}`, reviewer.headers)).body.moderation).toMatchObject({ banned: null, banRequests: [] });
 
@@ -164,20 +166,6 @@ describe('user pages and contributions', () => {
     const mod = await makeUser(ctx.sql, { trust: TRUST.MODERATOR });
     const rows = (await get<Page<ModUserRow>>(`/api/moderation/users?filter=reported&q=${encodeURIComponent(`User`)}`, mod.headers)).body.items;
     expect(rows.find((r) => r.id === target.id)?.openReports).toBe(2);
-  });
-});
-
-describe('reports', () => {
-  it('closes reports about a chat message when a reviewer hides it', async () => {
-    const author = await makeUser(ctx.sql, { trust: TRUST.MEMBER });
-    const reporter = await makeUser(ctx.sql, { trust: TRUST.MEMBER });
-    const reviewer = await makeUser(ctx.sql, { trust: TRUST.REVIEWER });
-    const [message] = await ctx.sql<{ id: string }[]>`
-      INSERT INTO comments (cell, user_id, body) VALUES (${PARIS}, ${author.id}, 'a nasty message') RETURNING id`;
-    await post('/api/reports', reporter.headers, { targetType: 'comment', targetId: message!.id, reason: 'harassment' });
-    expect((await post(`/api/messages/${message!.id}/hide`, reviewer.headers)).statusCode).toBe(200);
-    const tower = (await get<{ reports: { targetId: string }[] }>('/api/watchtower', reviewer.headers)).body;
-    expect(tower.reports.some((r) => r.targetId === message!.id)).toBe(false);
   });
 });
 
@@ -321,7 +309,6 @@ describe('ban requests and bans', () => {
     const third = await createStory(good.headers, { title: 'Third good story here', body: 'A long and careful account of what happened. '.repeat(20) });
     const held = (await editStory(troll.headers, third.storyId, { body: 'Nothing happened here at all, this is all fake.' })).json();
     expect(held.status).toBe('pending');
-    await ctx.sql`INSERT INTO comments (cell, user_id, body) VALUES (${PARIS}, ${troll.id}, 'a rude message')`;
     await post('/api/reports', troll.headers, { targetType: 'story', targetId: victim.storyId, reason: 'spam' });
     await post('/api/reports', reporter.headers, { targetType: 'story', targetId: own.storyId, reason: 'vandalism' });
 
@@ -332,7 +319,9 @@ describe('ban requests and bans', () => {
       storiesRolledBack: 1,
       editsRejected: 1,
       versionsRemoved: 4,
-      messagesHidden: 1,
+      developmentsRemoved: 0,
+      correctionsRemoved: 0,
+      collectionsHidden: 0,
       reportsClosed: 2,
     });
 

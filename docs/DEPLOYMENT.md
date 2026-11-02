@@ -1,4 +1,4 @@
-# Deploying Hexstory: Vercel + Neon + Cloudflare R2 + Redis Cloud
+# Deploying Hexstory: Vercel + Neon + Cloudflare R2 (+ optional Redis Cloud)
 
 This guide takes you from an empty Vercel account to a working production site, and covers every later
 release. It complements [DESIGN.md](DESIGN.md) (how the pieces work and why). Throughout,
@@ -8,9 +8,9 @@ What you will create:
 
 | Service | What for | Where it is configured |
 |---|---|---|
-| Vercel project | Hosting: CDN for built assets, one Node Function for API, sign-in, chat (WebSockets) and page HTML | Vercel dashboard, `vercel.json` |
-| Neon Postgres (via Vercel Marketplace) | All durable data, including chat history and sessions | Vercel → Storage, Neon console |
-| Redis Cloud (via Vercel Marketplace) | Chat fan-out between Function instances, presence, chat cooldown, API rate limits | Vercel → Storage, Redis Cloud console |
+| Vercel project | Hosting: CDN for built assets and cacheable public API responses (map points, home page), one Node Function for API, sign-in and page HTML | Vercel dashboard, `vercel.json` |
+| Neon Postgres (via Vercel Marketplace) | All durable data, including sessions | Vercel → Storage, Neon console |
+| Redis Cloud (via Vercel Marketplace), **optional** | API rate limits, cooldowns and small caches shared between Function instances | Vercel → Storage, Redis Cloud console |
 | Cloudflare R2 (2 buckets) | Published images (public via your domain) and uploaded originals (private staging) | Cloudflare dashboard |
 | Google OAuth client | Sign-in | Google Cloud console |
 
@@ -36,8 +36,9 @@ below is something you do, in this order.
    - `images.hexstory.example`: published images (R2 custom domain)
    - optional `preview.hexstory.example`: a stable preview site with its own data and sign-in
 4. **Plans.** Vercel Hobby is free but **for non-commercial use only**; if you turn on ads (or otherwise run
-   the site commercially) you need Vercel Pro. The free tiers of Neon and Redis Cloud are fine for testing,
-   but Redis Cloud's free database is too small for a public launch (§4, §8).
+   the site commercially) you need Vercel Pro. The free tiers of Neon, R2 and (if you use it) Redis Cloud
+   are enough to launch and grow for a while: there is no live chat or WebSocket any more, the map and home
+   page are served from the CDN cache, and Redis holds only rate-limit counters and small caches (§4, §8).
 
 ## 1. Vercel project
 
@@ -54,18 +55,18 @@ below is something you do, in this order.
    with §2 to §5, then redeploy (§6).
 4. **Settings → Build and Deployment → Node.js Version:** `24.x` (`package.json` `engines` also asks for it).
 5. **Settings → Functions:**
-   - **Fluid Compute:** must be **enabled** (the default for new projects; WebSockets require it).
-   - **Function Region:** pick the region you will also use for Neon and Redis. The default
+   - **Fluid Compute:** leave it **enabled** (the default for new projects; instances serve many requests).
+   - **Function Region:** pick the region you will also use for Neon (and Redis). The default
      **Washington, D.C., USA (iad1)** pairs with **AWS us-east-1** at Neon and Redis Cloud.
-   - Function duration and included files come from `vercel.json`: `maxDuration` 300 s (the Hobby maximum).
-     On Pro you may raise it to 800 in `vercel.json` so chat connections reconnect less often.
+   - Function duration and included files come from `vercel.json`: `maxDuration` 60 s. No request needs
+     more (the slowest is processing a photo); a low cap limits what a stuck request can cost.
 6. **Settings → Domains:** add `hexstory.example` (and `www` if you want it to redirect). Vercel shows the DNS
    records to create at your DNS provider. If the domain's DNS is on Cloudflare (needed for the R2 image
    domain, §3), add the records there and set them to **DNS only** (grey cloud), as Vercel recommends.
 7. Optional, for a stable preview site: create a long-lived Git branch (e.g. `preview`). In **Settings →
    Domains**, add `preview.hexstory.example` and, in its settings, assign it to that **Git branch**.
-   Deployments of other branches still get random `*.vercel.app` URLs. Those can be browsed, but sign-in,
-   writing and chat refuse them, because they don't match `APP_ORIGIN`. That is on purpose.
+   Deployments of other branches still get random `*.vercel.app` URLs. Those can be browsed, but sign-in
+   and writing refuse them, because they don't match `APP_ORIGIN`. That is on purpose.
 8. **Deployment Protection** (Settings → Deployment Protection): Vercel Authentication on previews is fine
    and recommended; production must be public.
 
@@ -190,37 +191,40 @@ production database, run `pg_dump -Fc` locally, `pg_restore --no-owner -d "$DATA
 empty Neon database, then `npm run migrate:production -- --retarget`. That re-marks the copied database
 (marked `development`) as production. Most launches start empty and skip this.
 
-## 4. Redis Cloud
+## 4. Redis Cloud (optional)
+
+Redis lets every Function instance share API rate limits (300 requests/min per address, 20 upload slots
+an hour), cooldowns and small caches (place-search results, resource-usage readings). **Without it the site
+works the same**, but each instance keeps its own counters and caches, so limits are per instance (daily
+limits always live in Postgres and still apply). For a small site that is fine and saves a service; add Redis
+when traffic grows or abuse appears.
 
 1. Vercel → your project → **Storage → Create Database → Redis** (by Redis, from the Marketplace).
 2. **Region:** the same AWS region as your Function and Neon (e.g. AWS us-east-1). **Plan:** the free 30 MB
-   plan works for testing; see the limits below before launch. High availability is optional.
+   plan is plenty for this use. High availability is optional.
 3. **Connect Project:** select this project and the **Production** environment (and Preview if you want
-   previews to share it; keys and channels are prefixed per environment, so they don't collide).
+   previews to share it; keys are prefixed per environment, so they don't collide).
 4. **Check the variable name.** On the database page, open the **.env.local** / Quickstart tab. The
    connection string should be injected as `REDIS_URL` (`redis://default:<password>@<host>:<port>`, or
    `rediss://…` when TLS is enabled). If the integration uses a different name, add `REDIS_URL` yourself
    (Settings → Environment Variables, mark Sensitive) with the same value. Both `redis://` and `rediss://`
    work.
 5. **TLS:** TLS can be enabled on paid plans (Redis Cloud console → database → *Security*). Then the URL
-   starts with `rediss://`. Traffic otherwise travels over the provider's network unencrypted, so turn TLS on
-   for a public launch.
+   starts with `rediss://`. Traffic otherwise travels over the provider's network unencrypted.
 6. **Eviction policy:** leave the default (*no eviction*). Every key the app writes expires on its own:
-   presence entries after 60 s, cooldowns after 2 s, rate-limit windows after 1 min or 1 h.
+   rate-limit windows after 1 min or 1 h, caches after at most a day.
 
-What the app needs from Redis is plain RESP over TCP with **Pub/Sub** (Redis Cloud supports it; a
-REST-only Redis API would not work). Each Function instance holds **2 connections**: commands and a
-subscriber.
+What the app needs from Redis is plain RESP over TCP (Redis Cloud supports it; a REST-only Redis API would
+not work). Each Function instance holds **1 connection**.
 
 | Free plan limit (Redis Cloud Essentials 30 MB) | What it means here |
 |---|---|
-| 30 concurrent connections | At most ~15 Function instances can be connected at once |
-| 100 operations/second | Roughly one op per API request (rate limit), plus chat and presence |
-| 5 GB/month bandwidth | Chat fan-out to every instance |
+| 30 concurrent connections | Up to ~30 Function instances connected at once |
+| 100 operations/second | Roughly one op per API request that reaches the Function (rate limit); CDN-cached requests cost none |
+| 5 GB/month bandwidth | Small counters and cached JSON only |
 
-The next tier (250 MB) allows 256 connections and 1,000 ops/s. If Redis is unreachable or throttled, the
-site keeps working, degraded: API rate limits are skipped (daily limits in Postgres still apply), chat
-posting returns "The Square is having trouble right now", and history still loads.
+If Redis is unreachable or throttled, the site keeps working: API rate limits are skipped (daily limits in
+Postgres still apply) and caches are recomputed.
 
 ## 5. Google sign-in
 
@@ -252,7 +256,7 @@ In the Google Cloud console (the project you used for development, or a new one 
    | `ADMIN_EMAILS` | e.g. `you@example.com` | same or different |
 
 `APP_ORIGIN` must be exactly the origin people use (scheme + host, no trailing slash). It drives the OAuth
-redirect URI, the CSRF check on every write and the WebSocket origin check. Leave `GOOGLE_*` unset to run a
+redirect URI and the CSRF check on every write. Leave `GOOGLE_*` unset to run a
 read-only site.
 
 ## 6. First deploy, and every release after it
@@ -268,16 +272,14 @@ the target database is up to date and belongs to their environment, and stop if 
    ```bash
    npm run migrate:production
    ```
-   This runs `vercel env run -e production -- npm run migrate -w @hexstory/api -- --env production`,
-   which uses `DATABASE_URL_UNPOOLED` from Vercel's Production environment. It prints the host it is
-   migrating, and refuses pooled URLs or a database marked for another environment.
-   If `vercel env run` can't read the variable (variables marked *Sensitive* can't be read back), copy the
-   direct connection string from the Neon console and run:
-   ```bash
-   DATABASE_URL_UNPOOLED='postgres://…direct…' npm run migrate -w @hexstory/api -- --env production
-   ```
-   Or keep it in a Doppler config (e.g. `prd`):
-   `doppler run -c prd -- npm run migrate -w @hexstory/api -- --env production`.
+   It asks for the **direct** (unpooled) connection string: Neon console → your project → **Connect** →
+   turn **Connection pooling off** → copy (its host has no `-pooler`). The input is hidden and the string is
+   only handed to the migrate process (never printed, saved or kept in shell history). If
+   `DATABASE_URL_UNPOOLED` is already set in your shell, it uses that instead, e.g. from a Doppler config:
+   `doppler run -c prd -- npm run migrate:production`. It prints the host it is migrating, and refuses pooled
+   URLs or a database marked for another environment.
+   (It doesn't use `vercel env run`: that can't read variables marked *Sensitive*, and Vercel CLI 65.9.0
+   misread `vercel env run -e production -- node <file>` as a deploy of `<file>`.)
 3. Same for the preview database: `npm run migrate:preview` (or the equivalent with the preview branch's
    direct string and `--env preview`).
 4. Vercel → **Deployments** → latest → **⋯ → Redeploy**. The build log ends with
@@ -566,7 +568,7 @@ flags, which contain no secrets.
 | `GOOGLE_CLIENT_SECRET` | existing | you | **yes** | Google OAuth client secret |
 | `ADMIN_EMAILS` | existing | you | no (but private) | Comma-separated emails of Moderators (granted at sign-in; removal applies on their next request) |
 | `GEOCODER_URL` | new | optional | no | Place search geocoder (Photon). Default `https://photon.komoot.io`, komoot's free public instance (fair use, no key, no guarantee). Point it at your own Photon if traffic grows. Redeploy after changing |
-| `REDIS_URL` | new | Redis integration (check the name, §4) | **yes** | `redis://` or `rediss://` URL. Required on Vercel; optional locally |
+| `REDIS_URL` | new | Redis integration (check the name, §4) | **yes** | `redis://` or `rediss://` URL. Optional everywhere; without it rate limits and caches are per instance |
 | `STORAGE_BACKEND` | new | defaults to `r2` on Vercel | no | `local` (default locally) or `r2` |
 | `R2_ENDPOINT` | new | you | no | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` |
 | `R2_BUCKET` | new | you | no | Public bucket for processed images |
@@ -598,25 +600,25 @@ Never put a secret in a `VITE_*` variable: those are compiled into public JavaSc
 ## 8. Limits, costs and caveats
 
 - **Vercel Functions:** request and response bodies are capped at **4.5 MB**, which is why images upload
-  directly to R2. Max duration is 300 s on Hobby, 800 s on Pro, and the default is 300 s. Billing on Fluid
-  compute is Active CPU + provisioned memory + invocations.
-- **WebSockets on Vercel** (generally available since 2026-10-20): a connection stays on one instance, and
-  new connections may land on another. It closes when the Function reaches `maxDuration`, so an open Square
-  silently reconnects every 5 minutes on Hobby and refetches its history. **An open connection keeps its
-  instance's memory billable while it is open**, even when idle (no CPU is charged while idle). The page only
-  connects while a Square tab is open, and many connections share one instance. Still, watch *Usage* after
-  launch. After a deployment, existing connections stay on the old deployment until they close.
+  directly to R2. `maxDuration` is 60 s here (`vercel.json`). Billing on Fluid compute is Active CPU +
+  provisioned memory + invocations; with no long-lived connections, instances are only busy while answering.
+- **CDN caching keeps the free tiers free.** `GET /api/map/points` and `GET /api/discover` are the same for
+  every visitor and send `Cache-Control: s-maxage=60, stale-while-revalidate=600`, so Vercel's CDN answers
+  most map loads and home-page visits without invoking the Function or waking Neon. Each instance also caches
+  them in memory for 30–60 s. The map filters, colours and counts stories in the browser, so moving the
+  timeline slider or switching layers costs no requests at all.
 - **Neon Free:** limited compute hours and storage, and the database scales to zero when idle, so the first
   request after a pause takes a little longer. The restore window is short.
-- **Redis Cloud Free:** 30 MB, 30 connections, 100 ops/s, 5 GB/month. That's test-sized; plan on the paid
-  tier for launch (§4).
+- **Redis Cloud Free** (optional): 30 MB, 30 connections, 100 ops/s, 5 GB/month, plenty for rate-limit
+  counters and caches (§4).
 - **R2:** free allowance per month (storage plus Class A/B operations), then pay-as-you-go; no egress fees.
   Each upload costs a few Class A operations (PUT original, 2× PUT processed, DELETE) and a Class B (GET).
 - **Hobby is non-commercial.** Ads or other commercial use need Vercel Pro.
 - **Previews on random URLs** are read-only by design (origin checks). Use the stable preview domain to test
-  sign-in, writing and chat.
-- **Delivery guarantees for chat** are in DESIGN.md §7 (Postgres is authoritative; Redis relays at most once;
-  clients reconcile on reconnect).
+  sign-in and writing.
+- **The map's point list** holds every published story (a few hundred KB gzipped for a few thousand
+  stories). Beyond `MAP_POINTS_MAX` (20,000) the least recently updated drop off the map; switch to
+  viewport/tiled queries before that (DESIGN.md §13).
 
 ### What was verified locally, and what only a real deployment can confirm
 
@@ -625,54 +627,50 @@ Verified in this repository (see the test suites and the changelog):
 - `vercel build` (Vercel CLI 65.9) produces one Node 24 Function with sharp's Linux binaries, the bundled API,
   `index.html` and the migrations, plus a static output without `index.html`.
 - The built Function, run locally under Node, with Redis unreachable: pages, API, sign-in redirect, 404s for
-  missing files and API paths, CSRF rejection, CSP containing the R2 origins, WebSocket connect + join, and
-  polling refused.
-- Two app instances sharing Postgres and Redis (ioredis-mock) in the test suite: cross-instance chat and
-  moderator removal, presence across instances with expiry of a vanished instance, a shared chat cooldown
-  and upload rate limit, resync after a Redis reconnect, and honest acks when Redis fails.
+  missing files and API paths, CSRF rejection and CSP containing the R2 origins (verified before the live
+  chat was retired; the retired `/socket.io` path now answers 404).
+- Two app instances sharing Postgres and Redis (ioredis-mock) in the test suite: a shared upload rate limit.
 - Direct uploads with the local backend (same API flow as R2) in a browser; R2 request signing with a fake
   transport.
-- Chat recovery in a browser across a server restart: a message posted meanwhile appears once, and a message
-  hidden meanwhile disappears.
 
 Not verifiable without the real services, so check them in the smoke test:
 
-- Vercel passing the original path to the Function through the rewrite, and WebSocket upgrades through it.
-  This is Vercel's documented pattern, but it hasn't been exercised on Vercel here.
+- Vercel passing the original path to the Function through the rewrite (Vercel's documented pattern), and
+  the CDN caching `/api/map/points` and `/api/discover` (look for `x-vercel-cache: HIT` on a second load).
 - R2 enforcing the signed `content-length` (the API re-checks the size either way), and the CORS preflight.
-- Redis Cloud's injected variable name, its TLS, and real reconnect behaviour.
+- If you use Redis: Redis Cloud's injected variable name, its TLS, and real reconnect behaviour.
 - Google sign-in on the production domain.
 
 ## 9. Smoke-test checklist (after each first deploy of an environment)
 
 Use two different browsers (or one normal and one private window) signed in as two different Google accounts.
 
-- [ ] **Navigation:** open `/`, click a hex, open a story; **refresh** on `/h/<cell>` and `/s/<id>`. The page
-      loads, not a 404. `/assets/does-not-exist.js` gives a 404, not the app.
+- [ ] **Navigation:** open `/`: the Discover panel shows beside the map. Use "Surprise me", open a story,
+      click a hex; **refresh** on `/h/<cell>`, `/s/<id>` and `/c/<id>`. The page loads, not a 404.
+      `/assets/does-not-exist.js` gives a 404, not the app.
+- [ ] **Map:** drag the timeline slider and switch layers (density, category, period, developing): the map
+      changes with no new network requests. A second load of `/api/map/points` shows `x-vercel-cache: HIT`.
 - [ ] **Headers:** DevTools → Network → the document → `content-security-policy` includes
       `https://images.hexstory.example` in `img-src` and the R2 endpoint in `connect-src`.
 - [ ] **Sign-in/out:** "Sign in with Google" returns you to the same page, signed in. The Welcome dialog
       appears once. Sign out, and you're signed out after a refresh.
-- [ ] **Stories:** create a story with a link and a photo; edit it; check Versions.
+- [ ] **Stories:** create a story with a summary, a pinned place, categories, a link, a photo and a
+      connection to another story; edit it; check Versions. The other story lists the connection too.
+- [ ] **Timelines and corrections:** add a development to an ongoing story; dispute a statement in a story
+      from the other account; as a Reviewer accept it with a note. The outcome shows on the story.
+- [ ] **Collections:** as a Member, create a place collection by picking an area; its stories appear.
 - [ ] **Images:** while adding a photo, Network shows `POST /api/uploads` → `PUT https://<account>.r2.cloudflarestorage.com/...` (200)
       → `POST /api/uploads/<id>/complete` (201). The image loads from `images.hexstory.example`. In R2, the
       staging bucket is empty again and the images bucket holds `<id>.webp` and `<id>-thumb.webp`.
-- [ ] **Chat:** both browsers open the same hex → The Square. Each says "2 people here now". A message from
-      one appears in the other within a second.
-- [ ] **Reconnection:** in one browser, DevTools → Network → *Offline* for ~10 s. Post from the other browser
-      meanwhile, then go back *Online*. The missed message appears once.
-- [ ] **Moderation:** with a Reviewer/Moderator account (`ADMIN_EMAILS`), hide a message. It disappears in
-      the other browser.
 - [ ] **New stories wait for approval:** with a fresh (Newcomer) account, write a story. Signed out, it isn't
       listed or reachable; the Moderator account sees it in Watchtower → New stories and approves it, after
       which it is public.
 - [ ] **Moderation screen:** as the Moderator, open Moderation: the Users tab lists both accounts, and the
-      Audit log shows the approval and the hidden message. Ban a throwaway account with "Remove posts" and
+      Audit log shows the approval and the correction decision. Ban a throwaway account with "Remove posts" and
       check its stories are gone; then unban it.
-- [ ] **Rate limits:** send two chat messages within 2 s: "Slow down a little." Request 21 upload slots
-      within an hour (or temporarily lower `POLICY.uploadsPerHour`) to get HTTP 429.
-- [ ] **Persistence:** redeploy (Deployments → Redeploy). Stories, images, chat history and your session
-      survive.
+- [ ] **Rate limits:** request 21 upload slots within an hour (or temporarily lower `POLICY.uploadsPerHour`)
+      to get HTTP 429.
+- [ ] **Persistence:** redeploy (Deployments → Redeploy). Stories, images and your session survive.
 - [ ] **Previews:** a preview deployment's build log shows `up to date for "preview"`, and data written there
       doesn't appear in production.
 - [ ] **Logs:** Vercel → Logs show no `[startup]` errors (Redis or database).

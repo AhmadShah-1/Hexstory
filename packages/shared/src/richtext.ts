@@ -35,7 +35,7 @@ const isHttp = (v: string) => {
   }
 };
 
-const inlineSchema: z.ZodType<Inline> = z.union([
+const inlineSchema: z.ZodType<Inline, Inline> = z.union([
   z.object({
     type: z.literal('text'),
     text: z.string().min(1).max(LIMITS.bodyMax),

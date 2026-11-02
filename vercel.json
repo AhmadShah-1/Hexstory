@@ -6,7 +6,7 @@
   "outputDirectory": "apps/web/dist-static",
   "functions": {
     "api/index.js": {
-      "maxDuration": 300,
+      "maxDuration": 60,
       "includeFiles": "{apps/web/dist/index.html,apps/api/migrations/*.sql}",
       "excludeFiles": "apps/web/dist/assets/**"
     }

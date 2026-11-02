@@ -17,8 +17,10 @@ const REASON_LABELS: Record<ReportReason, string> = {
 const TITLES: Record<ReportTarget, string> = {
   story: 'Report this story',
   revision: 'Report this version',
-  comment: 'Report this message',
   user: 'Report this person',
+  development: 'Report this development',
+  correction: 'Report this correction',
+  collection: 'Report this collection',
 };
 
 export function ReportDialog({ open, onClose, targetType, targetId }: {
@@ -28,7 +30,7 @@ export function ReportDialog({ open, onClose, targetType, targetId }: {
   targetId: string;
 }) {
   // Start from the likeliest reason for what is being reported.
-  const [reason, setReason] = useState<ReportReason>(targetType === 'story' || targetType === 'revision' ? 'vandalism' : 'harassment');
+  const [reason, setReason] = useState<ReportReason>(targetType === 'user' ? 'harassment' : 'vandalism');
   const [details, setDetails] = useState('');
   const report = useReport();
   const toast = useToast();

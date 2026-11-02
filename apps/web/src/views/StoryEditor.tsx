@@ -5,76 +5,85 @@ import {
   TRUST,
   createStorySchema,
   isDisplayCell,
-  toBaseCells,
   uncompact,
-  type CreateStoryInput,
-  type DateParts,
+  type Category,
   type RichDoc,
   type StoryDetail,
   type WriteResult,
 } from '@hexstory/shared';
 import { errorMessage } from '../api/client';
 import { useCreateStory, useEditStory, useSession, useStory } from '../api/queries';
+import { CategoryPicker } from '../components/Categories';
+import { ConnectionsField, type LinkDraft } from '../components/ConnectionsField';
+import {
+  DateInput,
+  Field,
+  SourcesInput,
+  fieldErrors,
+  fromDateDraft,
+  sourcesFromDrafts,
+  toDateDraft,
+  todayDraft,
+  type DateDraft,
+  type SourceDraft,
+} from '../components/DateInput';
+import { LocationField } from '../components/LocationField';
 import { Panel } from '../components/Panel';
+import { PeopleField } from '../components/PeopleField';
 import { RichEditor } from '../components/RichEditor';
 import { SignInPrompt } from '../components/SignInPrompt';
 import { NotFound } from './NotFound';
 import { useToast } from '../components/Toast';
-import { areaKm2 } from '../lib/format';
 import { useMapState } from '../map/MapContext';
 
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-
-interface DateDraft { year: string; era: 'CE' | 'BCE'; month: string; day: string }
 interface Draft {
   title: string;
+  summary: string;
   content: RichDoc;
   start: DateDraft;
   end: DateDraft;
   timing: 'moment' | 'range' | 'ongoing';
   isApprox: boolean;
-  sources: { title: string; url: string }[];
+  placeName: string;
+  /** Whether the wider area (map.selection) is part of the story. */
+  areaOn: boolean;
+  categories: Category[];
+  sources: SourceDraft[];
+  links: LinkDraft[];
+  people: string[];
   editSummary: string;
-}
-
-/** Most stories are about recent events, so dates start at today. */
-function today(): DateDraft {
-  const now = new Date();
-  return { year: String(now.getFullYear()), era: 'CE', month: String(now.getMonth() + 1), day: String(now.getDate()) };
-}
-
-function toDateDraft(d: DateParts | null): DateDraft {
-  if (!d) return today();
-  return { year: String(Math.abs(d.year)), era: d.year < 0 ? 'BCE' : 'CE', month: d.month ? String(d.month) : '', day: d.day ? String(d.day) : '' };
-}
-
-function fromDateDraft(d: DateDraft): DateParts {
-  // An empty year becomes NaN so validation says "Enter the year" rather than "There is no year 0".
-  const year = d.year ? Number(d.year) * (d.era === 'BCE' ? -1 : 1) : NaN;
-  return { year, month: d.month ? Number(d.month) : null, day: d.month && d.day ? Number(d.day) : null };
 }
 
 function initialDraft(story: StoryDetail | undefined): Draft {
   if (!story) {
     return {
-      title: '', content: [], start: today(), end: today(), timing: 'moment', isApprox: false,
-      sources: [{ title: '', url: '' }], editSummary: '',
+      title: '', summary: '', content: [], start: todayDraft(), end: todayDraft(), timing: 'moment', isApprox: false,
+      placeName: '', areaOn: false, categories: [], sources: [{ title: '', url: '' }], links: [], people: [], editSummary: '',
     };
   }
   const r = story.revision;
+  const titles = new Map(story.connections.filter((c) => c.direction === 'out').map((c) => [c.story.id, c.story.title]));
   return {
     title: r.title,
+    // Older stories have no summary: the field starts empty and must be filled before saving.
+    summary: r.summary ?? '',
     content: r.content,
     start: toDateDraft(r.start),
     end: toDateDraft(r.end),
     timing: r.isOngoing ? 'ongoing' : r.end ? 'range' : 'moment',
     isApprox: r.isApprox,
+    placeName: r.location?.placeName ?? '',
+    // One hexagon is just where the point falls; more means the writer marked a wider area.
+    areaOn: story.cellCount > 1,
+    categories: r.categories,
     sources: r.sources.map((s) => ({ title: s.title, url: s.url ?? '' })),
+    links: r.links.map((l) => ({ ...l, title: titles.get(l.storyId) ?? 'A story you can’t see' })),
+    people: r.people,
     editSummary: '',
   };
 }
 
-/** Creates a story (/new?cell=…) or edits one (/s/:id/edit). The map switches to region-picking mode meanwhile. */
+/** Creates a story (/new?cell=…) or edits one (/s/:id/edit). The map switches to picking mode meanwhile. */
 export function StoryEditor() {
   const { id } = useParams();
   const story = useStory(id);
@@ -131,19 +140,30 @@ function EditorForm({ story: loaded }: { story: StoryDetail | undefined }) {
         ? "Your changes are saved straight away. The story stays private until a reviewer approves it."
         : 'Your changes go live as soon as you save them.';
 
-  // Enter region-picking mode with the starting selection, and leave it cleanly.
-  const { setMode, setSelection, focusCells } = map;
+  // Enter picking mode with the story's point and area, and leave it cleanly.
+  const { setMode, setSelection, setPoint, setTool, focusCells, focusPoints } = map;
   useEffect(() => {
-    const initial = story ? uncompact(story.revision.cells) : startCell && isDisplayCell(startCell) ? toBaseCells([startCell]) : [];
     setMode('select');
-    setSelection(initial);
-    const focus = story ? story.revision.cells : startCell && isDisplayCell(startCell) ? [startCell] : [];
-    if (focus.length) focusCells(focus, { onlyIfHidden: true });
+    setTool(story && story.cellCount > 1 ? 'area' : 'point');
+    if (story) {
+      const point = story.revision.location ?? story.point;
+      setPoint({ lat: point.lat, lng: point.lng });
+      setSelection(story.cellCount > 1 ? uncompact(story.revision.cells) : []);
+      if (story.cellCount > 1) focusCells(story.revision.cells, { onlyIfHidden: true });
+      else focusPoints([point], { onlyIfHidden: true });
+    } else {
+      setPoint(null);
+      setSelection([]);
+      // From a region's "Write a story here": look there, but let the writer place the pin.
+      if (startCell && isDisplayCell(startCell)) focusCells([startCell], { onlyIfHidden: true });
+    }
     return () => {
       setMode('browse');
+      setTool('point');
+      setPoint(null);
       setSelection([]);
     };
-  }, [story, startCell, setMode, setSelection, focusCells]);
+  }, [story, startCell, setMode, setTool, setPoint, setSelection, focusCells, focusPoints]);
 
   const [dirty, setDirty] = useState(false);
   const saved = useRef(false);
@@ -165,26 +185,32 @@ function EditorForm({ story: loaded }: { story: StoryDetail | undefined }) {
     setDirty(true);
     setDraft((d) => ({ ...d, [key]: value }));
   };
-  const regionCount = map.selection.size;
 
-  const input = useMemo((): CreateStoryInput => ({
+  const input = useMemo(() => ({
     title: draft.title,
+    summary: draft.summary,
     content: draft.content,
-    cells: [...map.selection],
+    categories: draft.categories,
+    location: map.point ? { lat: map.point.lat, lng: map.point.lng, placeName: draft.placeName.trim() || null } : undefined,
+    cells: draft.areaOn ? [...map.selection] : [],
     start: fromDateDraft(draft.start),
     end: draft.timing === 'range' ? fromDateDraft(draft.end) : null,
     isOngoing: draft.timing === 'ongoing',
     isApprox: draft.isApprox,
-    sources: draft.sources.filter((s) => s.title.trim() || s.url.trim()).map((s) => ({ title: s.title.trim() || s.url.trim(), url: s.url.trim() || null })),
-  }), [draft, map.selection]);
+    sources: sourcesFromDrafts(draft.sources),
+    people: draft.people,
+    links: draft.links.map(({ storyId, relation }) => ({ storyId, relation })),
+  }), [draft, map.point, map.selection]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     const parsed = createStorySchema.safeParse(input);
     if (!parsed.success) {
-      const next: Record<string, string> = {};
-      for (const issue of parsed.error.issues) next[String(issue.path[0] ?? 'form')] ??= issue.message;
-      setErrors(next);
+      setErrors(fieldErrors(parsed.error.issues));
+      return;
+    }
+    if (draft.areaOn && input.cells.length === 0) {
+      setErrors({ cells: 'Pick the area on the map, or turn off the wider area.' });
       return;
     }
     setErrors({});
@@ -211,7 +237,7 @@ function EditorForm({ story: loaded }: { story: StoryDetail | undefined }) {
     }
   };
 
-
+  const summaryLength = draft.summary.trim().length;
   return (
     <Panel
       wide
@@ -236,9 +262,24 @@ function EditorForm({ story: loaded }: { story: StoryDetail | undefined }) {
           <input value={draft.title} maxLength={LIMITS.titleMax} onChange={(e) => set('title', e.target.value)} placeholder="What happened?" />
         </Field>
 
+        <Field
+          label="Summary"
+          error={errors.summary}
+          hint={
+            <span className="summary-hint">
+              <span>One or two sentences: what happened, and why it matters. Readers see this first.</span>
+              <span className={summaryLength > LIMITS.summaryMax || (summaryLength > 0 && summaryLength < LIMITS.summaryMin) ? 'error-text' : ''}>
+                {summaryLength}/{LIMITS.summaryMax}
+              </span>
+            </span>
+          }
+        >
+          <textarea rows={3} value={draft.summary} maxLength={LIMITS.summaryMax + 50} onChange={(e) => set('summary', e.target.value)} />
+        </Field>
+
         <fieldset className="field">
           <legend>When</legend>
-          <DateInput value={draft.start} onChange={(v) => set('start', v)} />
+          <DateInput value={draft.start} onChange={(v) => set('start', v)} label="Start" />
           <div className="segmented" role="radiogroup" aria-label="Duration">
             {(['moment', 'range', 'ongoing'] as const).map((t) => (
               <label key={t}>
@@ -250,7 +291,7 @@ function EditorForm({ story: loaded }: { story: StoryDetail | undefined }) {
           {draft.timing === 'range' && (
             <>
               <span className="muted small">Until</span>
-              <DateInput value={draft.end} onChange={(v) => set('end', v)} />
+              <DateInput value={draft.end} onChange={(v) => set('end', v)} label="End" />
             </>
           )}
           <label className="toggle">
@@ -260,27 +301,21 @@ function EditorForm({ story: loaded }: { story: StoryDetail | undefined }) {
           {(errors.start || errors.end) && <p className="error-text">{errors.start ?? errors.end}</p>}
         </fieldset>
 
-        <fieldset className="field">
-          <legend>Where</legend>
-          <div className="where">
-            <strong>{regionCount === 0 ? 'Nothing selected yet' : `About ${areaKm2(regionCount)} selected`}</strong>
-            <p className="muted small">
-              Click hexagons on the map to add or remove them. Zoomed out, one click covers a wide area; zoom in for precision.
-            </p>
-            <div className="row">
-              {regionCount > 0 && (
-                <>
-                  <button type="button" className="link-button" onClick={() => map.focusCells([...map.selection])}>Show on map</button>
-                  <button type="button" className="link-button" onClick={() => map.setSelection([])}>Clear</button>
-                </>
-              )}
-            </div>
-          </div>
-          {errors.cells && <p className="error-text">{errors.cells}</p>}
+        <LocationField
+          placeName={draft.placeName}
+          onPlaceName={(v) => set('placeName', v)}
+          error={errors.location}
+          area={{ on: draft.areaOn, onToggle: (on) => set('areaOn', on), error: errors.cells }}
+        />
+
+        <fieldset className={`field ${errors.categories ? 'field-error' : ''}`}>
+          <legend>What kind of event? <span className="muted small">(1 to {LIMITS.categoriesMax})</span></legend>
+          <CategoryPicker label="Categories" value={draft.categories} max={LIMITS.categoriesMax} onChange={(v) => set('categories', v)} />
+          {errors.categories && <p className="error-text">{errors.categories}</p>}
         </fieldset>
 
         <div className={`field ${errors.content ? 'field-error' : ''}`}>
-          <span className="field-label">The story</span>
+          <span className="field-label">The full account</span>
           <RichEditor initial={draft.content} onChange={(doc) => set('content', doc)} />
           <span className="muted small">Opinions are welcome. Say what you know and how you know it.</span>
           {errors.content && <span className="error-text">{errors.content}</span>}
@@ -289,35 +324,12 @@ function EditorForm({ story: loaded }: { story: StoryDetail | undefined }) {
         <fieldset className="field">
           <legend>Sources</legend>
           <p className="muted small">At least one. Readers see how many sources a story lists.</p>
-          {draft.sources.map((s, i) => (
-            <div className="source-input" key={i}>
-              <input
-                value={s.title}
-                placeholder="Title (book, article, eyewitness…)"
-                maxLength={LIMITS.sourceTitleMax}
-                onChange={(e) => set('sources', draft.sources.map((x, j) => (j === i ? { ...x, title: e.target.value } : x)))}
-              />
-              <input
-                value={s.url}
-                placeholder="Link (optional)"
-                inputMode="url"
-                maxLength={LIMITS.sourceUrlMax}
-                onChange={(e) => set('sources', draft.sources.map((x, j) => (j === i ? { ...x, url: e.target.value } : x)))}
-              />
-              {draft.sources.length > 1 && (
-                <button type="button" className="icon-button" aria-label="Remove source" onClick={() => set('sources', draft.sources.filter((_, j) => j !== i))}>
-                  ×
-                </button>
-              )}
-            </div>
-          ))}
-          {draft.sources.length < LIMITS.sourcesMax && (
-            <button type="button" className="link-button" onClick={() => set('sources', [...draft.sources, { title: '', url: '' }])}>
-              + Add another source
-            </button>
-          )}
+          <SourcesInput value={draft.sources} onChange={(v) => set('sources', v)} />
           {errors.sources && <p className="error-text">{errors.sources}</p>}
         </fieldset>
+
+        <ConnectionsField value={draft.links} onChange={(v) => set('links', v)} selfId={story?.id} error={errors.links} />
+        <PeopleField value={draft.people} onChange={(v) => set('people', v)} error={errors.people} />
 
         {story && (
           <Field label="What did you change?" hint="Optional, helps reviewers.">
@@ -326,52 +338,5 @@ function EditorForm({ story: loaded }: { story: StoryDetail | undefined }) {
         )}
       </form>
     </Panel>
-  );
-}
-
-function Field({ label, error, hint, children }: { label: string; error?: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <label className={`field ${error ? 'field-error' : ''}`}>
-      <span>{label}</span>
-      {children}
-      {hint && <span className="muted small">{hint}</span>}
-      {error && <span className="error-text">{error}</span>}
-    </label>
-  );
-}
-
-function DateInput({ value, onChange }: { value: DateDraft; onChange: (v: DateDraft) => void }) {
-  const set = (patch: Partial<DateDraft>) => onChange({ ...value, ...patch });
-  return (
-    <div className={`date-input ${value.era === 'BCE' ? 'date-input-era' : ''}`}>
-      <input
-        aria-label="Year"
-        placeholder="Year"
-        inputMode="numeric"
-        value={value.year}
-        onChange={(e) => set({ year: e.target.value.replace(/\D/g, '').slice(0, 5) })}
-      />
-      {/* BCE is supported but rare; the era picker only appears for dates that already use it. */}
-      {value.era === 'BCE' && (
-        <select aria-label="Era" value={value.era} onChange={(e) => set({ era: e.target.value as 'CE' | 'BCE' })}>
-          <option value="CE">CE</option>
-          <option value="BCE">BCE</option>
-        </select>
-      )}
-      <select aria-label="Month" value={value.month} onChange={(e) => set({ month: e.target.value, day: e.target.value ? value.day : '' })}>
-        <option value="">Month</option>
-        {MONTHS.map((m, i) => (
-          <option key={m} value={i + 1}>{m}</option>
-        ))}
-      </select>
-      <input
-        aria-label="Day"
-        placeholder="Day"
-        inputMode="numeric"
-        disabled={!value.month}
-        value={value.day}
-        onChange={(e) => set({ day: e.target.value.replace(/\D/g, '').slice(0, 2) })}
-      />
-    </div>
   );
 }

@@ -17,11 +17,8 @@ import { conflict, forbidden, notFound } from '../errors.js';
 import { POLICY, canReview, nextEarnedLevel } from '../policy.js';
 import { logModAction } from './modlog.js';
 import { getRules } from './settings.js';
-import { closeReportsAbout, copyToNewRevision, fetchStory, invalidateCellCounts } from './stories.js';
-import { anonymizeUser, contributionCounts, refreshTrust } from './users.js';
-
-/** Chat messages to drop live from open Squares (the database already hides them). */
-export type LiveHide = { id: string; cell: string }[];
+import { closeReportsAbout, copyToNewRevision, fetchStory, invalidateMapCache } from './stories.js';
+import { anonymizeUser, reputationOf, refreshTrust } from './users.js';
 
 const CLEANUP_REASON = 'Ban clean-up';
 
@@ -68,7 +65,9 @@ const openReportsAboutUser = (sql: Db) => sql`(
     (rp.target_type = 'user' AND rp.target_id = u.id::text)
     OR (rp.target_type = 'story' AND rp.target_id IN (SELECT s.id::text FROM stories s WHERE s.created_by = u.id))
     OR (rp.target_type = 'revision' AND rp.target_id IN (SELECT r.id::text FROM story_revisions r WHERE r.author_id = u.id))
-    OR (rp.target_type = 'comment' AND rp.target_id IN (SELECT c.id::text FROM comments c WHERE c.user_id = u.id))))`;
+    OR (rp.target_type = 'development' AND rp.target_id IN (SELECT d.id::text FROM story_developments d WHERE d.author_id = u.id))
+    OR (rp.target_type = 'correction' AND rp.target_id IN (SELECT c.id::text FROM corrections c WHERE c.author_id = u.id))
+    OR (rp.target_type = 'collection' AND rp.target_id IN (SELECT c.id::text FROM collections c WHERE c.created_by = u.id))))`;
 
 // ---------------------------------------------------------------------------------------------
 // User pages
@@ -96,8 +95,8 @@ export async function getUserProfile(sql: Sql, viewer: SessionUser | null, userI
 
   const [stats] = await sql<
     { storiesStarted: number; storiesLive: number; edits: number; editsAccepted: number; editsWaiting: number; editsRejected: number;
-      editsRemoved: number;
-      messages: number; storiesToday: number; editsToday: number; uploadsToday: number; uploadBytesToday: number }[]
+      editsRemoved: number; developments: number; corrections: number; correctionsAccepted: number;
+      storiesToday: number; editsToday: number; uploadsToday: number; uploadBytesToday: number }[]
   >`
     SELECT
       (SELECT count(*)::int FROM stories WHERE created_by = ${userId}) AS stories_started,
@@ -107,13 +106,16 @@ export async function getUserProfile(sql: Sql, viewer: SessionUser | null, userI
       (SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId} AND origin IN ('create', 'edit') AND status = 'pending' AND hidden_at IS NULL) AS edits_waiting,
       (SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId} AND origin IN ('create', 'edit') AND status = 'rejected' AND hidden_at IS NULL) AS edits_rejected,
       (SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId} AND origin IN ('create', 'edit') AND hidden_at IS NOT NULL) AS edits_removed,
-      (SELECT count(*)::int FROM comments WHERE user_id = ${userId} AND hidden_at IS NULL) AS messages,
+      (SELECT count(*)::int FROM story_developments WHERE author_id = ${userId}) AS developments,
+      (SELECT count(*)::int FROM corrections WHERE author_id = ${userId}) AS corrections,
+      (SELECT count(*)::int FROM corrections WHERE author_id = ${userId} AND status = 'accepted' AND hidden_at IS NULL) AS corrections_accepted,
       (SELECT count(*)::int FROM stories WHERE created_by = ${userId} AND created_at > now() - interval '1 day') AS stories_today,
-      (SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId} AND origin = 'edit' AND created_at > now() - interval '1 day') AS edits_today,
+      ((SELECT count(*)::int FROM story_revisions WHERE author_id = ${userId} AND origin = 'edit' AND created_at > now() - interval '1 day')
+        + (SELECT count(*)::int FROM story_developments WHERE author_id = ${userId} AND created_at > now() - interval '1 day')) AS edits_today,
       (SELECT count(*)::int FROM uploads WHERE user_id = ${userId} AND created_at > now() - interval '1 day') AS uploads_today,
       (SELECT COALESCE(sum(declared_bytes), 0)::float8 FROM uploads WHERE user_id = ${userId} AND created_at > now() - interval '1 day') AS upload_bytes_today`;
   const { storiesToday, editsToday, uploadsToday, uploadBytesToday, ...counts } = stats!;
-  const progress = await contributionCounts(sql, userId);
+  const progress = await reputationOf(sql, userId);
   const next = u.trustLocked ? null : nextEarnedLevel(u.trustLevel);
   const { promotion } = await getRules(sql);
   const rule = next === TRUST.MEMBER ? promotion.member : promotion.reviewer;
@@ -265,12 +267,15 @@ export async function declineBanRequests(sql: Sql, actor: SessionUser, userId: s
  *   (hidden if there is none);
  * - their held edits are rejected, and all their versions are removed from the history, so nobody can
  *   view or restore them;
- * - their chat messages are hidden; open reports they filed are dismissed, reports about their
- *   content are closed as handled.
+ * - their timeline developments and corrections are removed, their collections hidden;
+ * - open reports they filed are dismissed, reports about their content are closed as handled.
  * Changes others made on top of their edits stay; reviewers can restore further back by hand.
  */
 async function removeContentOf(tx: Db, actor: SessionUser, userId: string): Promise<CleanupSummary> {
-  const summary: CleanupSummary = { storiesHidden: 0, storiesRolledBack: 0, editsRejected: 0, versionsRemoved: 0, messagesHidden: 0, reportsClosed: 0 };
+  const summary: CleanupSummary = {
+    storiesHidden: 0, storiesRolledBack: 0, editsRejected: 0, versionsRemoved: 0,
+    developmentsRemoved: 0, correctionsRemoved: 0, collectionsHidden: 0, reportsClosed: 0,
+  };
 
   const own = await tx<{ id: string }[]>`
     UPDATE stories SET status = 'hidden', updated_at = now()
@@ -308,8 +313,16 @@ async function removeContentOf(tx: Db, actor: SessionUser, userId: string): Prom
 
   summary.versionsRemoved = (await tx`
     UPDATE story_revisions SET hidden_at = now() WHERE author_id = ${userId} AND hidden_at IS NULL RETURNING id`).length;
-  summary.messagesHidden = (await tx`
-    UPDATE comments SET hidden_at = now() WHERE user_id = ${userId} AND hidden_at IS NULL RETURNING id`).length;
+  summary.developmentsRemoved = (await tx`
+    UPDATE story_developments SET hidden_at = now(),
+      status = CASE WHEN status = 'pending' THEN 'rejected' ELSE status END,
+      reviewed_by = CASE WHEN status = 'pending' THEN ${actor.id}::uuid ELSE reviewed_by END,
+      reviewed_at = CASE WHEN status = 'pending' THEN now() ELSE reviewed_at END
+    WHERE author_id = ${userId} AND hidden_at IS NULL RETURNING id`).length;
+  summary.correctionsRemoved = (await tx`
+    UPDATE corrections SET hidden_at = now() WHERE author_id = ${userId} AND hidden_at IS NULL RETURNING id`).length;
+  summary.collectionsHidden = (await tx`
+    UPDATE collections SET status = 'hidden', updated_at = now() WHERE created_by = ${userId} AND status <> 'hidden' RETURNING id`).length;
 
   const filed = await tx`
     UPDATE reports SET resolved_by = ${actor.id}, resolved_at = now(), resolution = 'dismissed'
@@ -320,21 +333,16 @@ async function removeContentOf(tx: Db, actor: SessionUser, userId: string): Prom
     WHERE resolved_at IS NULL AND (
       (target_type = 'story' AND target_id IN (SELECT id::text FROM stories WHERE created_by = ${userId}))
       OR (target_type = 'revision' AND target_id IN (SELECT id::text FROM story_revisions WHERE author_id = ${userId}))
-      OR (target_type = 'comment' AND target_id IN (SELECT id::text FROM comments WHERE user_id = ${userId})))
+      OR (target_type = 'development' AND target_id IN (SELECT id::text FROM story_developments WHERE author_id = ${userId}))
+      OR (target_type = 'correction' AND target_id IN (SELECT id::text FROM corrections WHERE author_id = ${userId}))
+      OR (target_type = 'collection' AND target_id IN (SELECT id::text FROM collections WHERE created_by = ${userId})))
     RETURNING id`;
   summary.reportsClosed = filed.length + about.length;
   return summary;
 }
 
-async function recentMessages(tx: Db, userId: string): Promise<LiveHide> {
-  return tx<LiveHide>`
-    SELECT id, cell FROM comments
-    WHERE user_id = ${userId} AND created_at > now() - make_interval(hours => ${POLICY.banLiveHideHours})
-    ORDER BY created_at DESC LIMIT 500`;
-}
-
 /**
- * Bans (or unbans) a user. A ban signs them out everywhere, blocks writing and chat, settles open ban
+ * Bans (or unbans) a user. A ban signs them out everywhere, blocks writing, settles open ban
  * requests and reports about the account and, with `removeContent`, takes down what they contributed.
  * Banning an already-banned user with `removeContent` runs just the clean-up. Unbanning never brings
  * removed content back.
@@ -345,7 +353,7 @@ export async function setBanned(
   userId: string,
   input: { banned: boolean; reason: string | null; removeContent: boolean },
   adminEmails: readonly string[],
-): Promise<{ cleanup: CleanupSummary | null; liveHide: LiveHide }> {
+): Promise<{ cleanup: CleanupSummary | null }> {
   assertModerator(actor);
   const result = await sql.begin(async (tx) => {
     const target = await lockTarget(tx, actor, userId, adminEmails);
@@ -353,7 +361,7 @@ export async function setBanned(
       if (!target.bannedAt) throw conflict('This account is not banned.');
       await tx`UPDATE users SET banned_at = NULL WHERE id = ${userId}`;
       await logModAction(tx, actor.id, 'unban', 'user', userId, input.reason);
-      return { cleanup: null, liveHide: [] };
+      return { cleanup: null };
     }
     if (target.bannedAt && !input.removeContent) throw conflict('This account is already banned.');
 
@@ -368,9 +376,9 @@ export async function setBanned(
       reportsClosed: reports + (cleanup?.reportsClosed ?? 0),
       ...(cleanup ?? {}),
     });
-    return { cleanup, liveHide: await recentMessages(tx, userId) };
+    return { cleanup };
   });
-  if (result.cleanup) invalidateCellCounts();
+  if (result.cleanup) invalidateMapCache();
   return result;
 }
 
@@ -385,7 +393,7 @@ export async function deleteUser(
   userId: string,
   input: { reason: string | null; removeContent: boolean },
   adminEmails: readonly string[],
-): Promise<{ cleanup: CleanupSummary | null; liveHide: LiveHide }> {
+): Promise<{ cleanup: CleanupSummary | null }> {
   assertModerator(actor);
   const result = await sql.begin(async (tx) => {
     const target = await lockTarget(tx, actor, userId, adminEmails);
@@ -394,7 +402,6 @@ export async function deleteUser(
       await tx`INSERT INTO banned_subjects (sub_hash) VALUES (${subjectHash(target.googleSub)}) ON CONFLICT DO NOTHING`;
     }
     const cleanup = input.removeContent ? await removeContentOf(tx, actor, userId) : null;
-    const liveHide = input.removeContent ? await recentMessages(tx, userId) : [];
     const requests = await resolveBanRequests(tx, actor.id, userId, 'deleted');
     const reports = await closeReportsAbout(tx, actor.id, 'user', [userId]);
     await anonymizeUser(tx, userId);
@@ -405,9 +412,9 @@ export async function deleteUser(
       reportsClosed: reports + (cleanup?.reportsClosed ?? 0),
       ...(cleanup ?? {}),
     });
-    return { cleanup, liveHide };
+    return { cleanup };
   });
-  if (result.cleanup) invalidateCellCounts();
+  if (result.cleanup) invalidateMapCache();
   return result;
 }
 
@@ -469,12 +476,17 @@ export async function auditLog(
              WHEN 'revision' THEN (SELECT r.title FROM story_revisions r WHERE r.id::text = m.target_id)
              WHEN 'comment' THEN (SELECT left(c.body, 140) FROM comments c WHERE c.id::text = m.target_id)
              WHEN 'user' THEN (SELECT u.display_name FROM users u WHERE u.id::text = m.target_id)
+             WHEN 'development' THEN (SELECT d.title FROM story_developments d WHERE d.id::text = m.target_id)
+             WHEN 'correction' THEN (SELECT left(c.quote, 140) FROM corrections c WHERE c.id::text = m.target_id)
+             WHEN 'collection' THEN (SELECT c.title FROM collections c WHERE c.id::text = m.target_id)
              WHEN 'report' THEN (SELECT rp.target_type || ' reported for ' || rp.reason FROM reports rp WHERE rp.id::text = m.target_id)
              WHEN 'settings' THEN 'Site rules'
            END AS label,
            CASE m.target_type
              WHEN 'story' THEN m.target_id
              WHEN 'revision' THEN (SELECT r.story_id::text FROM story_revisions r WHERE r.id::text = m.target_id)
+             WHEN 'development' THEN (SELECT d.story_id::text FROM story_developments d WHERE d.id::text = m.target_id)
+             WHEN 'correction' THEN (SELECT c.story_id::text FROM corrections c WHERE c.id::text = m.target_id)
            END AS story_id,
            CASE WHEN m.target_type = 'user' THEN m.target_id END AS user_id,
            CASE WHEN m.target_type = 'comment' THEN (SELECT c.cell FROM comments c WHERE c.id::text = m.target_id) END AS cell

@@ -69,12 +69,6 @@ h1, h2, h3, p { margin: 0; }
 }
 .footer-links a { color: var(--muted); }
 
-.hint {
-  position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%); z-index: 4;
-  background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 999px;
-  font-size: 14px; box-shadow: var(--shadow); white-space: nowrap;
-  animation: fade-up 0.6s ease 0.8s both;
-}
 
 /* ---------- Panel ---------- */
 .panel {
@@ -107,7 +101,6 @@ h1, h2, h3, p { margin: 0; }
   .account .button-floating { padding: 6px 12px; font-size: 13.5px; }
   .app:has(.account .button-floating + .button-floating) .brand span { display: none; }
   .app:has(.panel) .footer-links, .app:has(.panel) .maplibregl-ctrl-bottom-right { display: none; }
-  .hint { bottom: 96px; white-space: normal; text-align: center; width: max-content; max-width: calc(100vw - 32px); }
 }
 
 /* ---------- Controls ---------- */
@@ -291,24 +284,6 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--f
 .card { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
 .card-head { display: flex; flex-direction: column; margin-bottom: 6px; }
 
-/* ---------- The Square ---------- */
-.square { display: flex; flex-direction: column; height: calc(100% - 46px); }
-.presence { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); padding: 10px 20px; }
-.presence-dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18); }
-.square-messages { flex: 1; overflow-y: auto; padding: 0 16px 8px; }
-.square-empty { text-align: center; padding: 24px 8px; }
-.message { display: flex; gap: 10px; padding: 7px 4px; }
-.message-main { min-width: 0; flex: 1; }
-.message-head { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
-.message-actions { margin-left: auto; display: none; gap: 10px; }
-.message-actions .link-button { font-size: 12px; color: var(--muted); }
-.message:hover .message-actions, .message:focus-within .message-actions { display: flex; }
-.message-body { font-size: 14.5px; overflow-wrap: anywhere; white-space: pre-wrap; }
-.square-input { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 16px 14px; border-top: 1px solid var(--line); }
-.square-input input { flex: 1; }
-.square-error { width: 100%; margin: 0; }
-.signin-prompt { padding: 20px; text-align: center; display: grid; gap: 12px; justify-items: center; }
-
 /* ---------- Modal ---------- */
 .modal {
   border: 0; padding: 0; border-radius: var(--radius); box-shadow: var(--shadow);
@@ -351,7 +326,6 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--f
 
 @keyframes slide-in { from { opacity: 0; transform: translateX(16px); } }
 @keyframes sheet-in { from { transform: translateY(40px); opacity: 0; } }
-@keyframes fade-up { from { opacity: 0; transform: translate(-50%, 8px); } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
@@ -510,3 +484,46 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--f
 }
 /* A wide panel pushes the account buttons left; keep the search clear of them. */
 @media (min-width: 721px) { .app:has(.panel-wide) .place-search { width: 200px; } }
+
+/* ---------- Shared: categories, sorting, story rows ---------- */
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.category-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.category-chip {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 550; line-height: 1.5;
+  padding: 0 8px; border-radius: 999px; color: var(--chip);
+  background: color-mix(in srgb, var(--chip) 10%, white); border: 1px solid color-mix(in srgb, var(--chip) 25%, white);
+}
+.category-chips-small .category-chip { font-size: 11px; padding: 0 6px; }
+.category-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.category-toggle {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--line); font-size: 13px; color: var(--ink);
+}
+.category-toggle:hover:not(:disabled) { border-color: var(--chip); }
+.category-toggle.is-on { background: color-mix(in srgb, var(--chip) 12%, white); border-color: var(--chip); color: var(--chip); font-weight: 600; }
+.category-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
+.category-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--chip); flex: none; }
+.sort-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+.sort-controls select {
+  padding: 5px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); font-size: 13px;
+}
+.story-row-summary {
+  font-size: 13.5px; color: #44403c; margin: 3px 0 4px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.story-row-place { color: var(--muted); }
+.story-row-place::before { content: '· '; }
+.chip-developing { background: var(--accent-soft); color: var(--accent); margin-left: 0; }
+.story-picker { position: relative; }
+.story-picker input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
+.story-picker-results {
+  list-style: none; margin: 4px 0 0; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); box-shadow: var(--shadow); max-height: 280px; overflow-y: auto;
+}
+.story-picker-results button {
+  display: flex; flex-direction: column; align-items: flex-start; width: 100%; text-align: left; gap: 1px;
+  padding: 6px 8px; border: 0; border-radius: 6px; background: none; cursor: pointer;
+}
+.story-picker-results button:hover, .story-picker-results button:focus-visible { background: var(--surface-2); }
+.story-picker-title { font-family: var(--serif); font-weight: 600; }
+.story-picker-empty { padding: 6px 8px; }

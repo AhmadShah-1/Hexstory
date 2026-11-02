@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { createStorySchema, editStorySchema } from '@hexstory/shared';
+import { invalidateDiscover } from '../services/discover.js';
 import { parse, requireWriter } from '../http.js';
 import {
   createStory,
@@ -10,6 +11,7 @@ import {
   listRevisions,
   restoreRevision,
   reviewRevision,
+  setFeatured,
   setProtection,
   setRevisionRemoved,
   setStoryStatus,
@@ -32,13 +34,16 @@ export const storyRoutes =
     app.post('/api/stories', async (req, reply) => {
       const user = requireWriter(req);
       const result = await createStory(deps, user, parse(createStorySchema, req.body));
+      invalidateDiscover();
       return reply.code(201).send(result);
     });
 
     app.put('/api/stories/:id', async (req) => {
       const user = requireWriter(req);
       const { id } = parse(idParams, req.params);
-      return editStory(deps, user, id, parse(editStorySchema, req.body));
+      const result = await editStory(deps, user, id, parse(editStorySchema, req.body));
+      invalidateDiscover();
+      return result;
     });
 
     app.get('/api/stories/:id/revisions', async (req) => {
@@ -79,7 +84,17 @@ export const storyRoutes =
       const { id } = parse(idParams, req.params);
       const body = parse(z.object({ status: z.enum(['active', 'hidden']), reason, revisionId: z.uuid().nullish() }), req.body);
       const status = await setStoryStatus(sql, user, id, body.status, body.reason ?? null, body.revisionId);
+      invalidateDiscover();
       return { ok: true, status };
+    });
+
+    app.post('/api/stories/:id/featured', async (req) => {
+      const user = requireWriter(req);
+      const { id } = parse(idParams, req.params);
+      const body = parse(z.object({ featured: z.boolean(), reason }), req.body);
+      await setFeatured(sql, user, id, body.featured, body.reason ?? null);
+      invalidateDiscover();
+      return { ok: true };
     });
 
     app.post('/api/stories/:id/protection', async (req) => {

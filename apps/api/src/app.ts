@@ -15,8 +15,9 @@ import type { Sql } from './db.js';
 import { HttpError, forbidden } from './errors.js';
 import { POLICY } from './policy.js';
 import './http.js';
-import { attachSquare } from './realtime/square.js';
 import { cellRoutes } from './routes/cells.js';
+import { contributionRoutes } from './routes/contributions.js';
+import { discoveryRoutes } from './routes/discovery.js';
 import type { Deps } from './routes/deps.js';
 import { moderationRoutes } from './routes/moderation.js';
 import { sessionRoutes } from './routes/session.js';
@@ -34,7 +35,10 @@ const MAP_ORIGINS = ['https://tiles.openfreemap.org'];
 const WEB_DIST = fileURLToPath(new URL('../../web/dist/', import.meta.url));
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-/** Page navigations get the SPA; API paths and anything that looks like a file get a real 404. */
+/**
+ * Page navigations get the SPA; API paths and anything that looks like a file get a real 404.
+ * `/socket.io` was the retired Square's endpoint: old clients still asking for it get a 404, not a page.
+ */
 export function isPageRequest(method: string, url: string): boolean {
   const path = url.split('?')[0]!;
   return (method === 'GET' || method === 'HEAD') && !/^\/(api|auth|media|socket\.io|assets)(\/|$)/.test(path) && !/\.[a-z0-9]+$/i.test(path);
@@ -45,15 +49,12 @@ export async function buildApp({
   sql,
   storage,
   coordinator,
-  heartbeatMs,
   webRoot = WEB_DIST,
 }: {
   config: Config;
   sql: Sql;
   storage: Storage;
   coordinator: Coordinator;
-  /** Presence refresh interval; only tests change it. */
-  heartbeatMs?: number;
   /** Built frontend directory; tests can supply an isolated HTML fixture. */
   webRoot?: string;
 }) {
@@ -134,21 +135,14 @@ export async function buildApp({
     return reply.code(500).send({ error: 'internal', message: 'Something went wrong on our side. Please try again.' });
   });
 
-  const square = await attachSquare(app.server, {
-    sql,
-    appOrigin: config.APP_ORIGIN,
-    coordinator,
-    log: app.log,
-    heartbeatMs,
-    trustProxy: config.TRUST_PROXY,
-  });
-  app.addHook('preClose', () => square.close());
-  const deps: Deps = { config, sql, storage, square };
+  const deps: Deps = { config, sql, storage, coordinator };
 
   await app.register(googleAuthRoutes({ sql, config }));
   await app.register(sessionRoutes(deps));
   await app.register(cellRoutes(deps));
   await app.register(storyRoutes(deps));
+  await app.register(discoveryRoutes(deps));
+  await app.register(contributionRoutes(deps));
   await app.register(uploadRoutes(deps));
   await app.register(moderationRoutes(deps));
   await app.register(userRoutes(deps));

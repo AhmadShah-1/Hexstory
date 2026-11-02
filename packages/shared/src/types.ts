@@ -1,6 +1,7 @@
 import type { DateParts } from './dates.js';
+import type { Category, LinkRelation } from './history.js';
 import type { RichDoc } from './richtext.js';
-import type { ReportReason, ReportTarget, Source } from './schemas.js';
+import type { CollectionKind, CorrectionProblem, Location, ReportReason, ReportTarget, Source } from './schemas.js';
 
 /** Trust levels gate what a user can do; see docs/DESIGN.md "Trust & moderation". */
 export const TRUST = {
@@ -31,25 +32,47 @@ export interface SessionInfo {
   signInEnabled: boolean;
 }
 
-export interface CellCount {
-  cell: string;
-  count: number;
-}
-
 export type StoryStatus = 'unreviewed' | 'active' | 'hidden';
 export type RevisionStatus = 'pending' | 'accepted' | 'rejected';
 
 export interface StorySummary {
   id: string;
   title: string;
+  /** The concise summary (for stories written before summaries existed, the start of the text). */
+  summary: string;
   thumbUrl: string | null;
   start: DateParts;
   end: DateParts | null;
   isOngoing: boolean;
   isApprox: boolean;
+  categories: Category[];
+  placeName: string | null;
   sourceCount: number;
   cellCount: number;
   status: StoryStatus;
+  publishedAt: string | null;
+  /** Latest accepted change or timeline development. */
+  lastUpdateAt: string;
+  /** An account of an older event, newly added (rather than an event written about as it happened). */
+  isHistorical: boolean;
+  /** Ongoing, or had a development recently (DEVELOPING_DAYS). */
+  developing: boolean;
+  featured: boolean;
+}
+
+/** A story as the map draws it: compact, so every published story fits in one cached response. */
+export interface MapPoint {
+  id: string;
+  title: string;
+  lat: number;
+  lng: number;
+  categories: Category[];
+  /** eventRange() of the story: comparable date keys. */
+  lo: number;
+  hi: number;
+  /** First year, for the period layer. */
+  year: number;
+  developing: boolean;
 }
 
 export interface StoryRevision {
@@ -63,12 +86,20 @@ export interface StoryRevision {
   /** The story itself; image blocks carry a `url`. */
   content: RichDoc;
   thumbUrl: string | null;
+  /** Null for versions written before summaries existed. */
+  summary: string | null;
+  categories: Category[];
+  /** Null for versions written before precise locations existed (the map then uses the area's centre). */
+  location: Location | null;
+  /** Optional wider area, compact H3 cells. Without one, the point's cell. */
   cells: string[];
   start: DateParts;
   end: DateParts | null;
   isOngoing: boolean;
   isApprox: boolean;
   sources: Source[];
+  people: string[];
+  links: { storyId: string; relation: LinkRelation }[];
   status: RevisionStatus;
   editSummary: string | null;
   flags: string[];
@@ -87,8 +118,123 @@ export interface StoryDetail {
   revision: StoryRevision;
   cellCount: number;
   pendingCount: number;
+  /** Where the map puts it: the version's point, or the centre of its area for older stories. */
+  point: { lat: number; lng: number };
+  publishedAt: string | null;
+  lastUpdateAt: string;
+  featured: boolean;
+  isHistorical: boolean;
+  /** Links in both directions, from this story's point of view, to stories the viewer can see. */
+  connections: StoryConnection[];
+  /** Latest developments (newest first; the full feed is /api/stories/:id/developments). */
+  developments: Development[];
+  developmentCount: number;
+  /** Corrections that are open, for the "disputed" notice; resolved ones are listed with the story too. */
+  openCorrections: number;
+  /** Place collections and hand-picked collections this story belongs to. */
+  collections: CollectionRef[];
   /** What the current viewer may do; computed server-side so the UI never guesses. */
-  can: { edit: boolean; editGoesLive: boolean; review: boolean };
+  can: { edit: boolean; editGoesLive: boolean; review: boolean; addDevelopment: boolean; correct: boolean; feature: boolean };
+}
+
+export interface StoryRef {
+  id: string;
+  title: string;
+  start: DateParts;
+  end: DateParts | null;
+  isOngoing: boolean;
+  isApprox: boolean;
+  thumbUrl: string | null;
+}
+
+export interface StoryConnection {
+  relation: LinkRelation;
+  /** 'out': this story's current version names the link; 'in': the other story does. */
+  direction: 'out' | 'in';
+  story: StoryRef;
+}
+
+export interface Development {
+  id: string;
+  storyId: string;
+  date: DateParts;
+  title: string;
+  body: string | null;
+  location: Location | null;
+  sources: Source[];
+  status: RevisionStatus;
+  removed: boolean;
+  author: { id: string; displayName: string };
+  createdAt: string;
+}
+
+export type CorrectionStatus = 'open' | 'accepted' | 'rejected';
+
+export interface Correction {
+  id: string;
+  storyId: string;
+  /** The version the reader disputed (it stays in the history whatever the outcome). */
+  revisionId: string;
+  quote: string;
+  problem: CorrectionProblem;
+  proposal: string;
+  evidence: Source[];
+  status: CorrectionStatus;
+  /** Whether the quoted statement is still in the current version. */
+  stillInStory: boolean;
+  author: { id: string; displayName: string };
+  createdAt: string;
+  resolution: {
+    note: string;
+    by: { id: string; displayName: string };
+    at: string;
+    fixedRevisionId: string | null;
+  } | null;
+  removed: boolean;
+}
+
+export interface CollectionRef {
+  id: string;
+  title: string;
+  kind: CollectionKind;
+}
+
+export interface CollectionSummary extends CollectionRef {
+  description: string;
+  storyCount: number;
+  featured: boolean;
+  /** Compact cells of the area (place collections). */
+  cells: string[];
+  createdBy: { id: string; displayName: string };
+  updatedAt: string;
+}
+
+export interface CollectionDetail extends CollectionSummary {
+  status: 'active' | 'hidden';
+  categories: Category[];
+  fromYear: number | null;
+  toYear: number | null;
+  /** Hand-picked stories in their arranged order, with the curator's note. */
+  items: { story: StorySummary; note: string | null }[];
+  /** Stories gathered by the collection's rules (area, categories, years), by date. Capped. */
+  matched: StorySummary[];
+  matchedTotal: number;
+  can: { edit: boolean; hide: boolean; feature: boolean };
+}
+
+/** The guided-discovery home panel. */
+export interface DiscoverData {
+  featured: StorySummary[];
+  /** Ongoing events and events with recent developments, most recently updated first. */
+  developing: StorySummary[];
+  /** Accounts of older events, newly added. */
+  discoveries: StorySummary[];
+  /** Events written about as they happened, newest first. */
+  recent: StorySummary[];
+  onThisDay: StorySummary[];
+  collections: CollectionSummary[];
+  /** How many published stories exist; lets the home page adapt while the site is young. */
+  total: number;
 }
 
 export interface RevisionListItem {
@@ -112,14 +258,6 @@ export interface WriteResult {
   storyStatus: StoryStatus;
 }
 
-export interface ChatMessage {
-  id: string;
-  cell: string;
-  author: { id: string; displayName: string };
-  body: string;
-  createdAt: string;
-}
-
 export interface Report {
   id: string;
   targetType: ReportTarget;
@@ -129,7 +267,7 @@ export interface Report {
   reporter: { id: string; displayName: string };
   createdAt: string;
   /** Short human-readable description of what was reported, with a link target if any. */
-  context: { label: string; storyId: string | null; cell: string | null };
+  context: { label: string; storyId: string | null; collectionId: string | null };
 }
 
 export interface PendingRevision {
@@ -151,6 +289,10 @@ export interface WatchtowerData {
   pending: PendingRevision[];
   unreviewed: UnreviewedStory[];
   reports: Report[];
+  /** Developments held for review, with the story they belong to. */
+  developments: (Development & { storyTitle: string })[];
+  /** Open corrections, oldest first, with the story title. */
+  corrections: (Correction & { storyTitle: string })[];
 }
 
 export interface Page<T> {
@@ -158,15 +300,30 @@ export interface Page<T> {
   nextOffset: number | null;
 }
 
+/** How someone's reputation adds up (points per REPUTATION). Shown to them and to reviewers only. */
+export interface ReputationBreakdown {
+  publishedStories: number;
+  linkedSources: number;
+  improvedStories: number;
+  developments: number;
+  correctionsAccepted: number;
+  activeWeeks: number;
+  correctionsRejected: number;
+  editsRejected: number;
+  correctedStories: number;
+  removed: number;
+}
+
 /** Where someone stands against the automatic promotion rules (RULES.promotion). */
 export interface TrustProgress {
   ageDays: number;
-  /** Distinct published stories with an accepted contribution of theirs. */
-  stories: number;
-  /** ...of which someone else started. */
-  othersStories: number;
+  reputation: number;
+  breakdown: ReputationBreakdown;
+  /** Published stories started by someone else that they improved or corrected. */
+  others: number;
+  activeWeeks: number;
   /** The next automatic level, or null if there is none (or a moderator fixed their level). */
-  next: { level: TrustLevel; minAgeDays: number; minStories: number; minOthersStories: number } | null;
+  next: { level: TrustLevel; minAgeDays: number; minReputation: number; minOthers: number; minActiveWeeks: number } | null;
 }
 
 export interface UserStats {
@@ -178,7 +335,9 @@ export interface UserStats {
   editsWaiting: number;
   editsRejected: number;
   editsRemoved: number;
-  messages: number;
+  developments: number;
+  corrections: number;
+  correctionsAccepted: number;
 }
 
 export interface BanRequest {
@@ -272,7 +431,9 @@ export interface CleanupSummary {
   storiesRolledBack: number;
   editsRejected: number;
   versionsRemoved: number;
-  messagesHidden: number;
+  developmentsRemoved: number;
+  correctionsRemoved: number;
+  collectionsHidden: number;
   reportsClosed: number;
 }
 
@@ -288,23 +449,6 @@ export interface AuditEntry {
   details: Record<string, unknown> | null;
   createdAt: string;
 }
-
-/** Events sent over the Square (Socket.IO) connection. */
-export interface ServerToClientEvents {
-  message: (msg: ChatMessage) => void;
-  presence: (data: { cell: string; count: number }) => void;
-  hidden: (data: { id: string }) => void;
-  /** The server may have missed live events (its Redis link dropped); clients should refetch history. */
-  resync: () => void;
-}
-export interface ClientToServerEvents {
-  /** The ack fires once the socket is in the room, so history fetched afterwards can't miss a message. */
-  join: (cell: string, ack?: () => void) => void;
-  leave: (cell: string) => void;
-  send: (data: { cell: string; body: string }, ack: (res: SendResult) => void) => void;
-}
-/** `delayed`: the message was saved but could not be relayed live to other servers. */
-export type SendResult = { ok: true; delayed?: boolean } | { ok: false; error: string };
 
 /** Where the browser uploads an image original before the server processes it. */
 export interface UploadTicket {

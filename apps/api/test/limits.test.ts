@@ -34,17 +34,16 @@ describe('site rules set by moderators', () => {
     expect((await put('/api/moderation/settings', mod.headers, { rules: { ...defaults, memberMinAgeDays: -1 } })).statusCode).toBe(400);
   });
 
-  it('applies new promotion thresholds and chat wait, publishes them, and logs the change', async () => {
+  it('applies new promotion thresholds, publishes them, and logs the change', async () => {
     const mod = await makeUser(ctx.sql, { trust: TRUST.MODERATOR });
     const newcomer = await makeUser(ctx.sql, { ageDays: 0 });
-    const next: EditableRules = { ...defaults, memberMinAgeDays: 0, memberMinStories: 0, chatMinAccountMinutes: 0 };
+    const next: EditableRules = { ...defaults, memberMinAgeDays: 0, memberMinReputation: 0 };
     const saved = await put('/api/moderation/settings', mod.headers, { rules: next, reason: 'quiet launch' });
     expect(saved.statusCode).toBe(200);
     expect(saved.json().rules).toEqual(next);
 
     const published = (await ctx.app.inject({ url: '/api/rules' })).json();
-    expect(published.promotion.member).toMatchObject({ minAgeDays: 0, minStories: 0 });
-    expect(published.chatMinAccountMinutes).toBe(0);
+    expect(published.promotion.member).toMatchObject({ minAgeDays: 0, minReputation: 0 });
     expect(published.storiesPerDay).toEqual(RULES.storiesPerDay);
 
     // Promotion is re-checked at the next contribution or sign-in.
@@ -56,7 +55,7 @@ describe('site rules set by moderators', () => {
       action: 'settings:rules',
       reason: 'quiet launch',
       target: { label: 'Site rules' },
-      details: { from: { memberMinAgeDays: 3, memberMinStories: 3, chatMinAccountMinutes: 10 }, to: { memberMinAgeDays: 0, memberMinStories: 0, chatMinAccountMinutes: 0 } },
+      details: { from: { memberMinAgeDays: 3, memberMinReputation: 15 }, to: { memberMinAgeDays: 0, memberMinReputation: 0 } },
     });
 
     await put('/api/moderation/settings', mod.headers, { rules: defaults });

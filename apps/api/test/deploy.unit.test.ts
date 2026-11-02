@@ -22,10 +22,11 @@ describe('configuration', () => {
     expect(config.REDIS_URL).toBeUndefined();
   });
 
-  it('on Vercel requires Redis and R2, and uses small pools and the proxy client IP', () => {
-    expect(() => loadConfig({ ...base, VERCEL: '1', VERCEL_ENV: 'production' })).toThrow(/R2_ENDPOINT[\s\S]*REDIS_URL/);
+  it('on Vercel requires R2 (Redis is optional), and uses small pools and the proxy client IP', () => {
+    expect(() => loadConfig({ ...base, VERCEL: '1', VERCEL_ENV: 'production' })).toThrow(/R2_ENDPOINT/);
     const config = loadConfig({ ...base, ...r2, VERCEL: '1', VERCEL_ENV: 'preview', REDIS_URL: 'rediss://default:pw@redis.example:6379' });
     expect(config).toMatchObject({ NODE_ENV: 'production', STORAGE_BACKEND: 'r2', DEPLOY_ENV: 'preview', DB_POOL_MAX: 5, TRUST_PROXY: true });
+    expect(loadConfig({ ...base, ...r2, VERCEL: '1', VERCEL_ENV: 'production' }).REDIS_URL).toBeUndefined();
   });
 
   it('refuses local disk storage on Vercel', () => {

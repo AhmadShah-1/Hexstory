@@ -4,7 +4,7 @@ export * from './limits.js';
 export * from './richtext.js';
 export * from './schemas.js';
 export * from './types.js';
-export * from './square.js';
+export * from './history.js';
 export * from './rules.js';
 export * from './support.js';
 export * from './usage.js';

@@ -145,8 +145,13 @@ export function StatsGrid({ stats }: { stats: UserStats }) {
         </dd>
       </div>
       <div>
-        <dt>Chat messages</dt>
-        <dd>{stats.messages}</dd>
+        <dt>Timeline additions</dt>
+        <dd>{stats.developments}</dd>
+      </div>
+      <div>
+        <dt>Corrections proposed</dt>
+        <dd>{stats.corrections}</dd>
+        <dd className="muted small">{stats.correctionsAccepted} accepted</dd>
       </div>
     </dl>
   );

@@ -1,10 +1,9 @@
-import type { FastifyBaseLogger, FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { TRUST } from '@hexstory/shared';
 import { forbidden } from '../errors.js';
 import { parse, requireTrust, requireUser, requireWriter } from '../http.js';
 import { canReview } from '../policy.js';
-import type { Square } from '../realtime/square.js';
 import {
   auditLog,
   banRequestQueue,
@@ -15,7 +14,6 @@ import {
   requestBan,
   setBanned,
   setTrustLevel,
-  type LiveHide,
 } from '../services/moderation.js';
 import { revisionsBy, storiesStartedBy } from '../services/stories.js';
 import type { Deps } from './deps.js';
@@ -25,15 +23,10 @@ const offsetQuery = z.object({ offset: z.coerce.number().int().min(0).max(100_00
 const reason = z.string().trim().max(500).nullish();
 const level = z.coerce.number().int().min(0).max(3);
 
-/** Drops a removed user's recent messages from open Squares; the database is already authoritative. */
-async function hideLive(square: Square, log: FastifyBaseLogger, messages: LiveHide) {
-  await Promise.all(messages.map((m) => square.messageHidden(m.cell, m.id).catch((err) => log.error({ err }, 'square: hide relay failed'))));
-}
-
 export const userRoutes =
   (deps: Deps): FastifyPluginAsync =>
   async (app) => {
-    const { sql, square } = deps;
+    const { sql } = deps;
     const admins = deps.config.ADMIN_EMAILS;
 
     // ---- User pages: public basics; contributions for the user themself and reviewers ----
@@ -83,8 +76,7 @@ export const userRoutes =
       const user = requireWriter(req);
       const { id } = parse(idParams, req.params);
       const body = parse(z.object({ banned: z.boolean(), reason, removeContent: z.boolean().default(false) }), req.body);
-      const { cleanup, liveHide } = await setBanned(sql, user, id, { banned: body.banned, reason: body.reason ?? null, removeContent: body.removeContent }, admins);
-      await hideLive(square, req.log, liveHide);
+      const { cleanup } = await setBanned(sql, user, id, { banned: body.banned, reason: body.reason ?? null, removeContent: body.removeContent }, admins);
       return { ok: true, cleanup };
     });
 
@@ -92,8 +84,7 @@ export const userRoutes =
       const user = requireWriter(req);
       const { id } = parse(idParams, req.params);
       const body = parse(z.object({ reason, removeContent: z.boolean() }), req.body);
-      const { cleanup, liveHide } = await deleteUser(sql, user, id, { reason: body.reason ?? null, removeContent: body.removeContent }, admins);
-      await hideLive(square, req.log, liveHide);
+      const { cleanup } = await deleteUser(sql, user, id, { reason: body.reason ?? null, removeContent: body.removeContent }, admins);
       return { ok: true, cleanup };
     });
 
@@ -133,7 +124,7 @@ export const userRoutes =
       const query = parse(
         offsetQuery.extend({
           actorId: z.uuid().optional(),
-          targetType: z.enum(['story', 'revision', 'comment', 'user', 'report', 'settings']).optional(),
+          targetType: z.enum(['story', 'revision', 'comment', 'user', 'report', 'settings', 'development', 'correction', 'collection']).optional(),
           targetId: z.string().max(64).optional(),
           action: z.string().regex(/^[a-z:-]{1,40}$/).optional(),
         }),

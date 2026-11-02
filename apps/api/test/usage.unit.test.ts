@@ -484,7 +484,7 @@ describe('coordinator cache for usage readings', () => {
 
   it('stores them under the environment prefix in Redis and reads INFO over the same connection', async () => {
     const client = new RedisMock() as unknown as Redis;
-    const c = createRedisCoordinator(client, new RedisMock() as unknown as Redis, 'hx:test-usage:');
+    const c = createRedisCoordinator(client, 'hx:test-usage:');
     await c.setJson('usage:x', { ok: true }, 60_000);
     expect(await c.getJson('usage:x')).toEqual({ ok: true });
     expect(await client.get('hx:test-usage:usage:x')).toBe('{"ok":true}');

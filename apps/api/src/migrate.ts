@@ -106,7 +106,7 @@ export async function checkDatabase(sql: Sql, environment: string): Promise<void
 /** The direct connection string; migrations must not go through PgBouncer. */
 export function migrationUrl(env: NodeJS.ProcessEnv): string {
   const url = env.DATABASE_URL_UNPOOLED || env.DATABASE_URL;
-  if (!url) throw new Error('Set DATABASE_URL_UNPOOLED (or DATABASE_URL locally); run through `doppler run` or `vercel env run`.');
+  if (!url) throw new Error('Set DATABASE_URL_UNPOOLED (or DATABASE_URL locally); e.g. `npm run migrate:production`, which asks for it.');
   if (/-pooler\./.test(new URL(url).hostname)) {
     throw new Error('That is a pooled (PgBouncer) connection string. Set DATABASE_URL_UNPOOLED to the direct connection string.');
   }

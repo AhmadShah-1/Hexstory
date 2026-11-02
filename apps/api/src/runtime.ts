@@ -22,9 +22,7 @@ export async function createApp(config: Config) {
   }
 
   const coordinator = config.REDIS_URL
-    ? await connectRedis(config.REDIS_URL, log).then(({ client, subscriber }) =>
-        createRedisCoordinator(client, subscriber, `hx:${config.DEPLOY_ENV}:`),
-      )
+    ? createRedisCoordinator(await connectRedis(config.REDIS_URL, log), `hx:${config.DEPLOY_ENV}:`)
     : createMemoryCoordinator();
 
   const app = await buildApp({ config, sql, storage: createStorage(config), coordinator });
@@ -35,7 +33,7 @@ export async function createApp(config: Config) {
   if (!isGoogleConfigured(config)) {
     app.log.warn('GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET not set: sign-in is disabled, the site is read-only.');
   }
-  if (!config.REDIS_URL) app.log.info('REDIS_URL not set: chat, presence and rate limits are kept in this process only.');
+  if (!config.REDIS_URL) app.log.info('REDIS_URL not set: rate limits and caches are kept in this process only.');
   return app;
 }
 

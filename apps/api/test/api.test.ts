@@ -67,8 +67,8 @@ describe('stories', () => {
     expect(titles.indexOf('Recent event here')).toBeLessThan(titles.indexOf('Old event here'));
     expect(list.items[0]!.sourceCount).toBe(1);
 
-    const counts = (await ctx.app.inject({ url: '/api/cells?res=2' })).json<{ cell: string; count: number }[]>();
-    expect(counts.find((c) => c.cell === cellToParent(PARIS, 2))?.count).toBeGreaterThanOrEqual(3);
+    const points = (await ctx.app.inject({ url: '/api/map/points' })).json<{ title: string }[]>();
+    expect(points.filter((p) => p.title.endsWith('event here'))).toHaveLength(3);
   });
 
   it('stores multi-hex stories compactly and counts their base cells', async () => {

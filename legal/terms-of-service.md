@@ -42,7 +42,8 @@ wrote them, not the views of Hexstory.
 
 ## 5. Content license
 
-All text contributed to the Service is licensed under the
+All text contributed to the Service, including stories, edits, developments added to an event's
+timeline, corrections and collections, is licensed under the
 [Creative Commons Attribution-ShareAlike 4.0 International License (CC BY-SA 4.0)](https://creativecommons.org/licenses/by-sa/4.0/),
 the same license used by Wikipedia. By submitting text you agree that:
 
@@ -53,9 +54,6 @@ the same license used by Wikipedia. By submitting text you agree that:
 Images you upload must be either your own work, which you license under CC BY-SA 4.0, or
 material under a compatible license (or in the public domain) that you identify when uploading.
 Do not upload images you do not have the right to share.
-
-Live chat messages are not covered by CC BY-SA; by posting them you grant us a non-exclusive,
-worldwide, royalty-free license to store, display and moderate them as part of the Service.
 
 ## 6. Rules of conduct
 
@@ -81,11 +79,11 @@ decisions may be logged publicly.
 
 To report content, use the Report button or contact hexstory.world@gmail.com.
 
-## 8. Live chat
+## 8. Corrections and collections
 
-Chat in each region is public to everyone viewing it and may be stored. Do not post anything
-you would not want seen publicly. Chat is moderated after the fact, so you may see offensive
-messages before they are removed.
+Corrections you propose, the evidence you give and the decision reviewers make on them are public,
+and stay with the story's history whatever the outcome. Collections you start are public and may
+be changed by reviewers. Propose corrections in good faith, with real sources.
 
 ## 9. Copyright complaints
 

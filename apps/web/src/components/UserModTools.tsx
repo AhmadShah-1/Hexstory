@@ -21,7 +21,9 @@ const CLEANUP_PARTS: [keyof CleanupSummary, string, string][] = [
   ['storiesRolledBack', 'rolled back', 'rolled back'],
   ['editsRejected', 'waiting edit rejected', 'waiting edits rejected'],
   ['versionsRemoved', 'version removed', 'versions removed'],
-  ['messagesHidden', 'message hidden', 'messages hidden'],
+  ['developmentsRemoved', 'timeline addition removed', 'timeline additions removed'],
+  ['correctionsRemoved', 'correction removed', 'corrections removed'],
+  ['collectionsHidden', 'collection hidden', 'collections hidden'],
   ['reportsClosed', 'report closed', 'reports closed'],
 ];
 
@@ -167,7 +169,7 @@ function ModeratorTools({ profile }: { profile: UserProfile }) {
           error={ban.error}
           onConfirm={(reason) => ban.mutate({ banned: false, reason }, { onSuccess: () => { toast('Unbanned.'); close(); } })}
         >
-          <p className="small muted">They can write and chat again. Posts that were removed don't come back.</p>
+          <p className="small muted">They can contribute again. Posts that were removed don't come back.</p>
         </ReasonDialog>
       )}
       {dialog === 'clean-up' && (
@@ -275,7 +277,8 @@ const RemoveContentExplainer = () => (
   <p className="small muted">
     Hides the stories they started, rolls back stories where their edit is the latest to the last version by
     someone else, rejects their waiting edits, removes all their versions from the history so they can't be
-    viewed or restored, and hides their chat messages.
+    viewed or restored, removes their additions to event timelines and their corrections, and hides the
+    collections they started.
   </p>
 );
 
@@ -304,7 +307,7 @@ export function BanDialog({ user, stats, open, onClose }: {
 
   return (
     <Modal open={open} onClose={onClose} title={`Ban ${user.displayName}`}>
-      <p className="small">They are signed out at once and can't write or chat while banned.</p>
+      <p className="small">They are signed out at once and can't contribute while banned.</p>
       {stats && (
         <p className="small muted">
           They started {plural(stats.storiesStarted, 'story', 'stories')} and wrote {plural(stats.edits, 'version', 'versions')}.
@@ -315,7 +318,7 @@ export function BanDialog({ user, stats, open, onClose }: {
           <input type="radio" name="ban-content" checked={!removeContent} onChange={() => setRemoveContent(false)} />
           <span>
             <strong>Ban and keep their posts</strong>
-            <span className="small muted">Stories and edits stay up; their chat messages disappear while they're banned.</span>
+            <span className="small muted">Their stories, edits and other contributions stay up.</span>
           </span>
         </label>
         <label>

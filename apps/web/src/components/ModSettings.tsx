@@ -8,16 +8,16 @@ import { useToast } from './Toast';
 
 const DEFAULTS = editableFrom(RULES);
 
-const FIELDS: { key: keyof EditableRules; label: string; unit: string; group: 'member' | 'reviewer' | 'chat' }[] = [
+const FIELDS: { key: keyof EditableRules; label: string; unit: string; group: 'member' | 'reviewer' }[] = [
   { key: 'memberMinAgeDays', label: 'Newcomer period: days before someone can become a Member', unit: 'days', group: 'member' },
-  { key: 'memberMinStories', label: 'Published stories they must have contributed to', unit: 'stories', group: 'member' },
+  { key: 'memberMinReputation', label: 'Reputation needed', unit: 'points', group: 'member' },
   { key: 'reviewerMinAgeDays', label: 'Days since joining before someone can become a Reviewer', unit: 'days', group: 'reviewer' },
-  { key: 'reviewerMinStories', label: 'Published stories they must have contributed to', unit: 'stories', group: 'reviewer' },
-  { key: 'reviewerMinOthersStories', label: '…of which started by someone else', unit: 'stories', group: 'reviewer' },
-  { key: 'chatMinAccountMinutes', label: 'Minutes a new account waits before posting in the Square', unit: 'minutes', group: 'chat' },
+  { key: 'reviewerMinReputation', label: 'Reputation needed', unit: 'points', group: 'reviewer' },
+  { key: 'reviewerMinOthers', label: "Other people's published stories they improved or corrected", unit: 'stories', group: 'reviewer' },
+  { key: 'reviewerMinActiveWeeks', label: 'Weeks in which something of theirs was accepted', unit: 'weeks', group: 'reviewer' },
 ];
 
-const GROUPS = { member: 'Becoming a Member', reviewer: 'Becoming a Reviewer', chat: 'The Square' } as const;
+const GROUPS = { member: 'Becoming a Member', reviewer: 'Becoming a Reviewer' } as const;
 
 /** "Newcomer period 3 → 1 days · …" for an audit-log entry of a rules change. */
 export function describeRuleChanges(details: Record<string, unknown> | null): string {
@@ -28,7 +28,7 @@ export function describeRuleChanges(details: Record<string, unknown> | null): st
     .join(' · ');
 }
 
-/** Moderators: the rules that can change without a deploy (promotion thresholds, the chat wait). */
+/** Moderators: the rules that can change without a deploy (promotion thresholds). */
 export function ModSettings() {
   const settings = useModSettings();
   const save = useUpdateModSettings();

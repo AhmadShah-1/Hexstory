@@ -8,8 +8,21 @@ import { usePlaces } from '../api/queries';
  * "Search for a place" box on the map. Suggestions appear as you type; Enter (or a click) opens the
  * hexagon for the highlighted place, the top one by default, and flies the map there. Towns and cities
  * open their finest hexagon, larger areas one bigger hexagon.
+ *
+ * With `onPick` (inside forms, e.g. choosing where a story happened) the chosen place is handed to the
+ * caller instead, and the box sits inline (`className`) rather than floating over the map.
  */
-export function PlaceSearch() {
+export function PlaceSearch({
+  onPick,
+  placeholder = 'Search for a place',
+  label = placeholder,
+  className = 'place-search',
+}: {
+  onPick?: (place: Place) => void;
+  placeholder?: string;
+  label?: string;
+  className?: string;
+} = {}) {
   const navigate = useNavigate();
   const [text, setText] = useState('');
   const [query, setQuery] = useState('');
@@ -35,7 +48,8 @@ export function PlaceSearch() {
     setText('');
     setQuery('');
     inputRef.current?.blur();
-    navigate(`/h/${place.cell}`, { state: { focus: true, placeName: place.name } });
+    if (onPick) onPick(place);
+    else navigate(`/h/${place.cell}`, { state: { focus: true, placeName: place.name } });
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -60,7 +74,7 @@ export function PlaceSearch() {
 
   const showList = open && text.trim().length >= 2;
   return (
-    <div className="place-search" role="search">
+    <div className={className} role="search">
       <svg className="place-search-icon" viewBox="0 0 20 20" aria-hidden="true">
         <circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" strokeWidth="2" />
         <path d="m13 13 4.5 4.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -70,12 +84,12 @@ export function PlaceSearch() {
         type="search"
         className="place-search-input"
         role="combobox"
-        aria-label="Search for a place"
+        aria-label={label}
         aria-autocomplete="list"
         aria-expanded={showList}
         aria-controls={listId}
         aria-activedescendant={showList && results[active] ? `${listId}-${active}` : undefined}
-        placeholder="Search for a place"
+        placeholder={placeholder}
         autoComplete="off"
         spellCheck={false}
         maxLength={100}

@@ -15,7 +15,6 @@ export default defineConfig({
       '/api': API,
       '/auth': API,
       '/media': API,
-      '/socket.io': { target: API, ws: true },
     },
   },
   build: { sourcemap: true },

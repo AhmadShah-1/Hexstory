@@ -1,10 +1,22 @@
 import { Link, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { TRUST, type PendingRevision, type Report, type UnreviewedStory } from '@hexstory/shared';
+import { useState } from 'react';
+import {
+  CORRECTION_PROBLEM_LABELS,
+  LIMITS,
+  TRUST,
+  formatDateParts,
+  type Correction,
+  type Development,
+  type PendingRevision,
+  type Report,
+  type UnreviewedStory,
+} from '@hexstory/shared';
 import { ApiError, errorMessage } from '../api/client';
 import {
   keys,
-  useHideMessage,
+  useModerateCorrection,
+  useModerateDevelopment,
   useResolveReport,
   useReviewRevision,
   useSession,
@@ -18,9 +30,17 @@ import { useToast } from '../components/Toast';
 import { WordDiff } from '../components/WordDiff';
 import { timeAgo } from '../lib/format';
 
-type Tab = 'pending' | 'new' | 'reports';
+type Tab = 'pending' | 'new' | 'timelines' | 'corrections' | 'reports';
+const TABS: Tab[] = ['pending', 'new', 'timelines', 'corrections', 'reports'];
+const TAB_LABELS: Record<Tab, string> = {
+  pending: 'Pending edits',
+  new: 'New stories',
+  timelines: 'Timelines',
+  corrections: 'Corrections',
+  reports: 'Reports',
+};
 
-/** Watchtower: the reviewer's queue of pending edits, new stories and reports. */
+/** Watchtower: the reviewer's queue of pending edits, new stories, held timeline additions, corrections and reports. */
 export function Watchtower() {
   const session = useSession();
   const trust = session.data?.user?.trustLevel ?? 0;
@@ -29,7 +49,7 @@ export function Watchtower() {
   // The tab lives in the URL, so Back returns to it after opening a story or version.
   const [params, setParams] = useSearchParams();
   const tabParam = params.get('tab');
-  const tab: Tab = tabParam === 'new' || tabParam === 'reports' ? tabParam : 'pending';
+  const tab: Tab = TABS.includes(tabParam as Tab) ? (tabParam as Tab) : 'pending';
   const setTab = (t: Tab) => setParams(t === 'pending' ? {} : { tab: t }, { replace: true });
   const viewerId = session.data?.user?.id;
 
@@ -41,7 +61,13 @@ export function Watchtower() {
     );
   }
 
-  const counts = { pending: data.data?.pending.length ?? 0, new: data.data?.unreviewed.length ?? 0, reports: data.data?.reports.length ?? 0 };
+  const counts: Record<Tab, number> = {
+    pending: data.data?.pending.length ?? 0,
+    new: data.data?.unreviewed.length ?? 0,
+    timelines: data.data?.developments.length ?? 0,
+    corrections: data.data?.corrections.length ?? 0,
+    reports: data.data?.reports.length ?? 0,
+  };
   return (
     <Panel
       title="Watchtower"
@@ -49,9 +75,9 @@ export function Watchtower() {
       wide
     >
       <div className="tabs" role="tablist">
-        {(['pending', 'new', 'reports'] as const).map((t) => (
+        {TABS.map((t) => (
           <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
-            {t === 'pending' ? 'Pending edits' : t === 'new' ? 'New stories' : 'Reports'}
+            {TAB_LABELS[t]}
             {counts[t] > 0 && <span className="count">{counts[t]}</span>}
           </button>
         ))}
@@ -71,6 +97,21 @@ export function Watchtower() {
           <>
             <p className="queue-note">Stories by newcomers stay private until a reviewer approves them.</p>
             {data.data?.unreviewed.length ? data.data.unreviewed.map((s) => <NewStoryCard key={s.story.id} item={s} viewerId={viewerId} />) : <Empty />}
+          </>
+        )}
+        {tab === 'timelines' && (
+          <>
+            <p className="queue-note">Developments added to an event's timeline by newcomers, or to protected stories, wait here.</p>
+            {data.data?.developments.length ? data.data.developments.map((d) => <DevelopmentCard key={d.id} item={d} viewerId={viewerId} />) : <Empty />}
+          </>
+        )}
+        {tab === 'corrections' && (
+          <>
+            <p className="queue-note">
+              Readers dispute a quoted statement and give evidence. Fix the story with a normal edit if they're right, then
+              accept with a note; the note is public. Corrections to stories you started are for another reviewer.
+            </p>
+            {data.data?.corrections.length ? data.data.corrections.map((c) => <CorrectionCard key={c.id} item={c} viewerId={viewerId} />) : <Empty />}
           </>
         )}
         {tab === 'reports' && (data.data?.reports.length ? data.data.reports.map((r) => <ReportCard key={r.id} report={r} />) : <Empty />)}
@@ -184,26 +225,106 @@ function NewStoryCard({ item, viewerId }: { item: UnreviewedStory; viewerId: str
   );
 }
 
+function DevelopmentCard({ item, viewerId }: { item: Development & { storyTitle: string }; viewerId: string | undefined }) {
+  const moderate = useModerateDevelopment(item.storyId);
+  const toast = useToast();
+  return (
+    <div className="card">
+      <div className="card-head">
+        <Link to={`/s/${item.storyId}`}><strong>{item.storyTitle}</strong></Link>
+        <span className="muted small">
+          by <Link to={`/u/${item.author.id}`}>{item.author.displayName}</Link> · {timeAgo(item.createdAt)}
+        </span>
+      </div>
+      <p><strong>{formatDateParts(item.date)}</strong> · {item.title}{item.location?.placeName && <span className="muted"> · {item.location.placeName}</span>}</p>
+      {item.body && <p className="excerpt">{item.body}</p>}
+      <ul className="small">
+        {item.sources.map((s, i) => <li key={i}>{s.url ? <a href={s.url} target="_blank" rel="nofollow ugc noopener noreferrer">{s.title}</a> : s.title}</li>)}
+      </ul>
+      {item.author.id === viewerId ? (
+        <p className="small muted">This is your own addition: another reviewer has to decide on it.</p>
+      ) : (
+        <div className="action-row">
+          <button className="button button-primary" disabled={moderate.isPending} onClick={() => moderate.mutate({ id: item.id, action: 'accept' }, { onSuccess: () => toast('Added to the timeline') })}>
+            Accept
+          </button>
+          <button className="button button-danger" disabled={moderate.isPending} onClick={() => moderate.mutate({ id: item.id, action: 'reject' }, { onSuccess: () => toast('Not accepted') })}>
+            Reject
+          </button>
+        </div>
+      )}
+      {moderate.error && <p className="error-text">{errorMessage(moderate.error)}</p>}
+    </div>
+  );
+}
+
+function CorrectionCard({ item, viewerId }: { item: Correction & { storyTitle: string }; viewerId: string | undefined }) {
+  const moderate = useModerateCorrection(item.storyId);
+  const toast = useToast();
+  const [note, setNote] = useState('');
+  const decide = (decision: 'accepted' | 'rejected') =>
+    moderate.mutate(
+      { id: item.id, action: 'resolve', decision, note: note.trim() },
+      { onSuccess: () => toast(decision === 'accepted' ? 'Correction accepted' : 'Correction not accepted') },
+    );
+  return (
+    <div className="card">
+      <div className="card-head">
+        <Link to={`/s/${item.storyId}#corrections`}><strong>{item.storyTitle}</strong></Link>
+        <span className="muted small">
+          {CORRECTION_PROBLEM_LABELS[item.problem]} · by <Link to={`/u/${item.author.id}`}>{item.author.displayName}</Link> · {timeAgo(item.createdAt)}
+        </span>
+      </div>
+      <blockquote className="correction-quote">{item.quote}</blockquote>
+      <p className="small muted">{item.stillInStory ? 'Still in the current text.' : 'No longer in the current text (maybe already fixed).'}</p>
+      <p>{item.proposal}</p>
+      <ul className="small">
+        {item.evidence.map((s, i) => <li key={i}>{s.url ? <a href={s.url} target="_blank" rel="nofollow ugc noopener noreferrer">{s.title}</a> : s.title}</li>)}
+      </ul>
+      {item.author.id === viewerId ? (
+        <p className="small muted">This is your own correction: another reviewer has to decide on it.</p>
+      ) : (
+        <>
+          <label className="field">
+            <span>Public note explaining the decision</span>
+            <textarea rows={2} maxLength={LIMITS.correctionNoteMax} value={note} onChange={(e) => setNote(e.target.value)} />
+          </label>
+          <div className="action-row">
+            <button className="button button-primary" disabled={!note.trim() || moderate.isPending} onClick={() => decide('accepted')}>Accept</button>
+            <button className="button button-danger" disabled={!note.trim() || moderate.isPending} onClick={() => decide('rejected')}>Don't accept</button>
+            <Link className="button" to={`/s/${item.storyId}/edit`}>Fix the story</Link>
+          </div>
+          <p className="small muted">To link the version that fixed it, decide from the story's Corrections section after editing.</p>
+        </>
+      )}
+      {moderate.error && <p className="error-text">{errorMessage(moderate.error)}</p>}
+    </div>
+  );
+}
+
 function reportLink(report: Report): string | null {
-  const { storyId, cell } = report.context;
+  const { storyId, collectionId } = report.context;
   switch (report.targetType) {
     case 'story': return storyId ? `/s/${storyId}` : null;
     case 'revision': return `/v/${report.targetId}`;
-    case 'comment': return cell ? `/h/${cell}?tab=square` : null;
+    case 'development': return storyId ? `/s/${storyId}` : null;
+    case 'correction': return storyId ? `/s/${storyId}#corrections` : null;
+    case 'collection': return collectionId ? `/c/${collectionId}` : null;
     case 'user': return `/u/${report.targetId}`;
   }
 }
 
 function ReportCard({ report }: { report: Report }) {
   const resolve = useResolveReport();
-  const hide = useHideMessage();
-  // Hiding a message or removing a version also closes the reports about it, so there's nothing left to resolve.
+  // Removing a version (or hiding a story) also closes the reports about it, so there's nothing left to resolve.
   const removeVersion = useSetRevisionRemoved(report.context.storyId ?? '');
   const hideStory = useSetStoryStatus(report.context.storyId ?? '');
   const toast = useToast();
   const link = reportLink(report);
-  const busy = resolve.isPending || hide.isPending || removeVersion.isPending || hideStory.isPending;
-  const error = resolve.error ?? hide.error ?? removeVersion.error ?? hideStory.error;
+  const removeDevelopment = useModerateDevelopment(report.context.storyId ?? '');
+  const removeCorrection = useModerateCorrection(report.context.storyId ?? '');
+  const busy = resolve.isPending || removeVersion.isPending || hideStory.isPending || removeDevelopment.isPending || removeCorrection.isPending;
+  const error = resolve.error ?? removeVersion.error ?? hideStory.error ?? removeDevelopment.error ?? removeCorrection.error;
   return (
     <div className="card">
       <div className="card-head">
@@ -215,14 +336,24 @@ function ReportCard({ report }: { report: Report }) {
       <p>{link ? <Link to={link}>{report.context.label}</Link> : report.context.label}</p>
       {report.details && <p className="small muted">“{report.details}”</p>}
       <div className="action-row">
-        {report.targetType === 'comment' && (
-          <button
-            className="button button-danger"
-            disabled={busy}
-            onClick={() => hide.mutate(report.targetId, { onSuccess: () => toast('Message hidden') })}
-          >
-            Hide message
-          </button>
+        {report.targetType === 'development' && (
+          <ConfirmAction
+            label="Remove development"
+            explain="Only reviewers will see it on the timeline. This closes the report."
+            busy={busy}
+            onConfirm={(reason, done) => removeDevelopment.mutate({ id: report.targetId, action: 'remove', reason }, { onSuccess: () => { toast('Removed from the timeline'); done(); } })}
+          />
+        )}
+        {report.targetType === 'correction' && (
+          <ConfirmAction
+            label="Remove correction"
+            explain="For abuse only: only reviewers will see it. This closes the report."
+            busy={busy}
+            onConfirm={(reason, done) => removeCorrection.mutate({ id: report.targetId, action: 'remove', reason }, { onSuccess: () => { toast('Correction removed'); done(); } })}
+          />
+        )}
+        {report.targetType === 'collection' && report.context.collectionId && (
+          <Link className="button" to={`/c/${report.context.collectionId}`}>Open the collection</Link>
         )}
         {report.targetType === 'story' && report.context.storyId && (
           <ConfirmAction

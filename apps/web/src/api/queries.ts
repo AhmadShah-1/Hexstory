@@ -3,9 +3,20 @@ import { RULES, type EditableRules, type Rules } from '@hexstory/shared';
 import type {
   AuditEntry,
   BanRequestGroup,
-  CellCount,
-  ChatMessage,
   CleanupSummary,
+  CollectionDetail,
+  CollectionInput,
+  CollectionKind,
+  CollectionSummary,
+  Correction,
+  CreateCorrectionInput,
+  CreateDevelopmentInput,
+  Development,
+  DiscoverData,
+  MapPoint,
+  Category,
+  StoryKind,
+  StorySort,
   ContributionEdit,
   ContributionStory,
   CreateStoryInput,
@@ -29,16 +40,37 @@ import type {
 } from '@hexstory/shared';
 import { ApiError, api } from './client';
 
+/** Filters and ordering for story lists (sent as query parameters; see storyListQuerySchema). */
+export interface StoryFilters {
+  sort?: StorySort;
+  kind?: StoryKind;
+  categories?: Category[];
+  from?: number;
+  to?: number;
+  q?: string;
+  person?: string;
+  /** Only ongoing events and those with recent developments. */
+  ongoing?: '1';
+  /** "On this day": "MM-DD". */
+  on?: string;
+}
+
 /** All query keys in one place so invalidation stays consistent. */
 export const keys = {
   session: ['session'] as const,
   support: ['support'] as const,
-  cells: (res: number) => ['cells', res] as const,
-  cellStories: (cell: string) => ['cell-stories', cell] as const,
+  mapPoints: ['map-points'] as const,
+  discover: ['discover'] as const,
+  stories: (filters: StoryFilters) => ['stories', filters] as const,
+  summaries: (ids: string[]) => ['summaries', ids] as const,
+  cellStories: (cell: string, filters: StoryFilters = {}) => ['cell-stories', cell, filters] as const,
+  developments: (storyId: string) => ['developments', storyId] as const,
+  corrections: (storyId: string) => ['corrections', storyId] as const,
+  collections: (kind?: CollectionKind) => ['collections', kind ?? 'all'] as const,
+  collection: (id: string) => ['collection', id] as const,
   story: (id: string) => ['story', id] as const,
   revisions: (id: string) => ['revisions', id] as const,
   revision: (id: string) => ['revision', id] as const,
-  messages: (cell: string) => ['messages', cell] as const,
   watchtower: ['watchtower'] as const,
   user: (id: string) => ['user', id] as const,
   userStories: (id: string) => ['user-stories', id] as const,
@@ -64,22 +96,67 @@ export const useSupportLinks = () =>
 export const useSession = () =>
   useQuery({ queryKey: keys.session, queryFn: () => api<SessionInfo>('/api/session'), staleTime: 60_000 });
 
-export const useCellCounts = (res: number) =>
-  useQuery({
-    queryKey: keys.cells(res),
-    queryFn: () => api<CellCount[]>(`/api/cells?res=${res}`),
-    staleTime: 30_000,
+/** List filters as query-string values (categories comma-separated). */
+const listParams = (f: StoryFilters, offset: number) =>
+  queryString({
+    sort: f.sort,
+    kind: f.kind && f.kind !== 'all' ? f.kind : undefined,
+    categories: f.categories?.length ? f.categories.join(',') : undefined,
+    from: f.from ?? undefined,
+    to: f.to ?? undefined,
+    q: f.q,
+    person: f.person,
+    ongoing: f.ongoing,
+    on: f.on,
+    offset,
+  });
+
+/** Every published story as a map point. The map filters, colours and counts these in the browser. */
+export const useMapPoints = () =>
+  useQuery({ queryKey: keys.mapPoints, queryFn: () => api<MapPoint[]>('/api/map/points'), staleTime: 60_000, placeholderData: (prev) => prev });
+
+/** The guided-discovery home panel; "On this day" uses the visitor's own date. */
+export const useDiscover = () => {
+  const now = new Date();
+  return useQuery({
+    queryKey: [...keys.discover, now.getMonth() + 1, now.getDate()],
+    queryFn: () => api<DiscoverData>(`/api/discover?m=${now.getMonth() + 1}&d=${now.getDate()}`),
+    staleTime: 60_000,
+  });
+};
+
+/** Any list of stories (explore, search, a person, developing events), paged. */
+export const useStoryList = (filters: StoryFilters, enabled = true) =>
+  useInfiniteQuery({
+    queryKey: keys.stories(filters),
+    queryFn: ({ pageParam }) => api<Page<StorySummary>>(`/api/stories?${listParams(filters, pageParam)}`),
+    initialPageParam: 0,
+    getNextPageParam: (last) => last.nextOffset,
+    enabled,
     placeholderData: (prev) => prev,
   });
 
-export const useCellStories = (cell: string) =>
+/** Stories in a region, with the same filters and orderings. */
+export const useCellStories = (cell: string, filters: StoryFilters = {}) =>
   useInfiniteQuery({
-    queryKey: keys.cellStories(cell),
-    queryFn: ({ pageParam }) =>
-      api<{ items: StorySummary[]; nextOffset: number | null }>(`/api/cells/${cell}/stories?offset=${pageParam}`),
+    queryKey: keys.cellStories(cell, filters),
+    queryFn: ({ pageParam }) => api<Page<StorySummary>>(`/api/cells/${cell}/stories?${listParams(filters, pageParam)}`),
     initialPageParam: 0,
     getNextPageParam: (last) => last.nextOffset,
+    placeholderData: (prev) => prev,
   });
+
+/** Summaries for stories known by id (e.g. the nearest map points), in the given order. */
+export const useStorySummaries = (ids: string[]) =>
+  useQuery({
+    queryKey: keys.summaries(ids),
+    queryFn: () => api<StorySummary[]>(`/api/stories/summaries?ids=${ids.join(',')}`),
+    enabled: ids.length > 0,
+    staleTime: 60_000,
+  });
+
+/** A random published story's id ("Surprise me" prefers well-sourced, connected ones). */
+export const randomStoryId = async (mode: 'surprise' | 'any') => (await api<{ id: string | null }>(`/api/stories/random?mode=${mode}`)).id;
 
 export const useStory = (id: string | undefined) =>
   useQuery({ queryKey: keys.story(id ?? ''), queryFn: () => api<StoryDetail>(`/api/stories/${id}`), enabled: !!id });
@@ -96,9 +173,6 @@ export const useRevision = (id: string | null | undefined) =>
     staleTime: 60_000,
   });
 
-export const useMessages = (cell: string) =>
-  useQuery({ queryKey: keys.messages(cell), queryFn: () => api<ChatMessage[]>(`/api/cells/${cell}/messages`) });
-
 export const useWatchtower = (enabled: boolean) =>
   useQuery({ queryKey: keys.watchtower, queryFn: () => api<WatchtowerData>('/api/watchtower'), enabled });
 
@@ -106,8 +180,7 @@ export const useWatchtower = (enabled: boolean) =>
 function useInvalidateStories() {
   const qc = useQueryClient();
   return (storyId?: string) => {
-    qc.invalidateQueries({ queryKey: ['cells'] });
-    qc.invalidateQueries({ queryKey: ['cell-stories'] });
+    for (const key of ['map-points', 'discover', 'stories', 'summaries', 'cell-stories', 'collection', 'collections']) qc.invalidateQueries({ queryKey: [key] });
     qc.invalidateQueries({ queryKey: keys.watchtower });
     qc.invalidateQueries({ queryKey: ['user-stories'] });
     qc.invalidateQueries({ queryKey: ['user-revisions'] });
@@ -119,6 +192,8 @@ function useInvalidateStories() {
     if (storyId) {
       qc.invalidateQueries({ queryKey: keys.story(storyId) });
       qc.invalidateQueries({ queryKey: keys.revisions(storyId) });
+      qc.invalidateQueries({ queryKey: keys.developments(storyId) });
+      qc.invalidateQueries({ queryKey: keys.corrections(storyId) });
     }
   };
 }
@@ -214,14 +289,112 @@ export function useResolveReport() {
   });
 }
 
-export function useHideMessage() {
-  const qc = useQueryClient();
+/** Reviewers feature a story on the home page, or take it off. */
+export function useSetFeatured(storyId: string) {
+  const invalidate = useInvalidateStories();
   return useMutation({
-    mutationFn: (id: string) => api(`/api/messages/${id}/hide`, { method: 'POST', body: {} }),
-    onSuccess: () => {
-      REPORT_KEYS.forEach((queryKey) => qc.invalidateQueries({ queryKey }));
-      qc.invalidateQueries({ queryKey: ['messages'] });
-    },
+    mutationFn: (featured: boolean) => api(`/api/stories/${storyId}/featured`, { method: 'POST', body: { featured } }),
+    onSuccess: () => invalidate(storyId),
+  });
+}
+
+// ---- Event timelines ----
+
+export const useDevelopments = (storyId: string, enabled = true) =>
+  useInfiniteQuery({
+    queryKey: keys.developments(storyId),
+    queryFn: ({ pageParam }) => api<Page<Development>>(`/api/stories/${storyId}/developments?offset=${pageParam}`),
+    initialPageParam: 0,
+    getNextPageParam: (last) => last.nextOffset,
+    enabled,
+  });
+
+export function useAddDevelopment(storyId: string) {
+  const invalidate = useInvalidateStories();
+  return useMutation({
+    mutationFn: (input: CreateDevelopmentInput) =>
+      api<{ id: string; status: 'live' | 'pending' }>(`/api/stories/${storyId}/developments`, { method: 'POST', body: input }),
+    onSuccess: () => invalidate(storyId),
+  });
+}
+
+/** Accept or turn down a held development (reviewers), or remove one from the timeline. */
+export function useModerateDevelopment(storyId: string) {
+  const invalidate = useInvalidateStories();
+  return useMutation({
+    mutationFn: ({ id, action, reason }: { id: string; action: 'accept' | 'reject' | 'remove'; reason?: string }) =>
+      action === 'remove'
+        ? api(`/api/developments/${id}/remove`, { method: 'POST', body: { reason } })
+        : api(`/api/developments/${id}/review`, { method: 'POST', body: { decision: action, reason } }),
+    onSuccess: () => invalidate(storyId),
+  });
+}
+
+// ---- Corrections ----
+
+export const useCorrections = (storyId: string, enabled = true) =>
+  useQuery({ queryKey: keys.corrections(storyId), queryFn: () => api<Correction[]>(`/api/stories/${storyId}/corrections`), enabled });
+
+export function useCreateCorrection(storyId: string) {
+  const invalidate = useInvalidateStories();
+  return useMutation({
+    mutationFn: (input: CreateCorrectionInput) => api<{ id: string }>(`/api/stories/${storyId}/corrections`, { method: 'POST', body: input }),
+    onSuccess: () => invalidate(storyId),
+  });
+}
+
+/** Reviewers accept or reject a correction with a public note, or remove an abusive one. */
+export function useModerateCorrection(storyId: string) {
+  const invalidate = useInvalidateStories();
+  return useMutation({
+    mutationFn: (
+      input:
+        | { id: string; action: 'resolve'; decision: 'accepted' | 'rejected'; note: string; fixedRevisionId?: string | null }
+        | { id: string; action: 'remove'; reason?: string },
+    ) =>
+      input.action === 'remove'
+        ? api(`/api/corrections/${input.id}/remove`, { method: 'POST', body: { reason: input.reason } })
+        : api(`/api/corrections/${input.id}/resolve`, {
+            method: 'POST',
+            body: { decision: input.decision, note: input.note, fixedRevisionId: input.fixedRevisionId ?? null },
+          }),
+    onSuccess: () => invalidate(storyId),
+  });
+}
+
+// ---- Collections ----
+
+export const useCollections = (kind?: CollectionKind) =>
+  useInfiniteQuery({
+    queryKey: keys.collections(kind),
+    queryFn: ({ pageParam }) => api<Page<CollectionSummary>>(`/api/collections?${queryString({ kind, offset: pageParam })}`),
+    initialPageParam: 0,
+    getNextPageParam: (last) => last.nextOffset,
+  });
+
+export const useCollection = (id: string | undefined) =>
+  useQuery({ queryKey: keys.collection(id ?? ''), queryFn: () => api<CollectionDetail>(`/api/collections/${id}`), enabled: !!id });
+
+/** Creates a collection (no id) or replaces one's contents. */
+export function useSaveCollection(id?: string) {
+  const invalidate = useInvalidateStories();
+  return useMutation({
+    mutationFn: (input: CollectionInput) =>
+      id
+        ? api<{ ok: true }>(`/api/collections/${id}`, { method: 'PUT', body: input }).then(() => ({ id }))
+        : api<{ id: string }>('/api/collections', { method: 'POST', body: input }),
+    onSuccess: () => invalidate(),
+  });
+}
+
+export function useModerateCollection(id: string) {
+  const invalidate = useInvalidateStories();
+  return useMutation({
+    mutationFn: (input: { status: 'active' | 'hidden'; reason?: string } | { featured: boolean }) =>
+      'featured' in input
+        ? api(`/api/collections/${id}/featured`, { method: 'POST', body: input })
+        : api(`/api/collections/${id}/status`, { method: 'POST', body: input }),
+    onSuccess: () => invalidate(),
   });
 }
 
@@ -280,7 +453,7 @@ function useInvalidateModeration() {
   const qc = useQueryClient();
   const invalidateStories = useInvalidateStories();
   return () => {
-    for (const key of ['user', 'mod-users', 'ban-requests', 'audit-log', 'messages', 'revision', 'revisions']) qc.invalidateQueries({ queryKey: [key] });
+    for (const key of ['user', 'mod-users', 'ban-requests', 'audit-log', 'revision', 'revisions', 'developments', 'corrections']) qc.invalidateQueries({ queryKey: [key] });
     qc.invalidateQueries({ queryKey: ['story'] });
     invalidateStories();
   };

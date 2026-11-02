@@ -107,3 +107,12 @@ export function formatCellLocation(cell: string): string {
   const ew = lng >= 0 ? 'E' : 'W';
   return `${Math.abs(lat).toFixed(1)}°${ns} ${Math.abs(lng).toFixed(1)}°${ew}`;
 }
+
+/**
+ * Compact form of a large area using display resolutions only (2–5): compacting can produce
+ * resolution 0–1 cells, which the story index (`story_cells`, res 2–5) can't be matched against.
+ */
+export function compactDisplay(baseCells: readonly string[]): string[] {
+  const minRes = DISPLAY_RESOLUTIONS[0];
+  return compactCells([...baseCells]).flatMap((cell) => (getResolution(cell) < minRes ? cellToChildren(cell, minRes) : [cell]));
+}

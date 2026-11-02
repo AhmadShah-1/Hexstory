@@ -1,7 +1,17 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router';
-import { RULES, TRUST, TRUST_NAMES, displayNameSchema, type Me, type TrustLevel, type UserProfile } from '@hexstory/shared';
+import {
+  REPUTATION,
+  RULES,
+  TRUST,
+  TRUST_NAMES,
+  displayNameSchema,
+  type Me,
+  type ReputationBreakdown,
+  type TrustLevel,
+  type UserProfile,
+} from '@hexstory/shared';
 import { errorMessage } from '../api/client';
 import { keys, useDeleteAccount, useSession, useSignOut, useUpdateProfile, useUserProfile } from '../api/queries';
 import { EditsList, StatsGrid, StoriesList } from '../components/Contributions';
@@ -87,8 +97,8 @@ const WHY_WAITING: Record<TrustLevel, string> = {
 
 const ROLE_TEXT: Record<TrustLevel, string> = {
   0: "You're new here. Stories you start stay private (only you and reviewers can see them) until a reviewer approves them, and you can keep editing them until then. Other edits, including edits to stories that are already published, wait for a reviewer before they appear.",
-  1: `Your stories and edits go live straight away. A few edits still wait for a reviewer: ones that remove more than ${RULES.largeRemovalPercent}% of a story, and edits to stories a moderator has protected.`,
-  2: 'Your stories and edits go live straight away. You also look after Hexstory in the Watchtower: approving new stories, accepting or turning down held edits, removing harmful versions and handling reports.',
+  1: `Your stories, edits and timeline developments go live straight away, and you can start collections. A few edits still wait for a reviewer: ones that remove more than ${RULES.largeRemovalPercent}% of a story, and edits to stories a moderator has protected.`,
+  2: 'Your stories and edits go live straight away. You also look after Hexstory in the Watchtower: approving new stories, accepting or turning down held edits and developments, deciding corrections, removing harmful versions and handling reports.',
   3: 'You can do everything reviewers can, and also ban people, change levels, protect stories and read the audit log.',
 };
 
@@ -108,18 +118,29 @@ function Overview({ level, details }: { level: TrustLevel; details: NonNullable<
         </p>
       </section>
 
+      <section className="account-section">
+        <h3 className="section-label">Your reputation: {progress.reputation}</h3>
+        <p className="muted small">
+          Reputation grows when your work is accepted and holds up: published stories with linked sources, improvements
+          to other people's stories, accepted corrections and steady participation. Work that is turned down,
+          corrected or removed costs points. Editing the same story again and again earns nothing extra. Only you and
+          reviewers can see it; there are no public rankings.
+        </p>
+        <ReputationBreakdownList breakdown={progress.breakdown} />
+      </section>
+
       {next ? (
         <section className="account-section">
           <h3 className="section-label">Becoming a {TRUST_NAMES[next.level]}</h3>
-          <Progress label="Days since you joined" value={progress.ageDays} max={next.minAgeDays} />
-          <Progress label="Published stories you've contributed to" value={progress.stories} max={next.minStories} />
-          {next.minOthersStories > 0 && (
-            <Progress label="…of them started by someone else" value={progress.othersStories} max={next.minOthersStories} />
+          {next.minReputation > 0 && <Progress label="Reputation" value={progress.reputation} max={next.minReputation} />}
+          {next.minAgeDays > 0 && <Progress label="Days since you joined" value={progress.ageDays} max={next.minAgeDays} />}
+          {next.minOthers > 0 && (
+            <Progress label="Other people's published stories you improved or corrected" value={progress.others} max={next.minOthers} />
           )}
-          <p className="muted small">
-            Only published stories count, and each story counts once however many times you edit it. You're promoted
-            automatically once everything is complete.
-          </p>
+          {next.minActiveWeeks > 0 && (
+            <Progress label="Weeks in which something of yours was accepted" value={progress.activeWeeks} max={next.minActiveWeeks} />
+          )}
+          <p className="muted small">You're promoted automatically once everything is complete.</p>
         </section>
       ) : (
         !trustLocked &&
@@ -142,6 +163,44 @@ function Overview({ level, details }: { level: TrustLevel; details: NonNullable<
         <StatsGrid stats={stats} />
       </section>
     </>
+  );
+}
+
+/** Each kind of contribution, its count and the points it adds or costs (REPUTATION). */
+const BREAKDOWN: { key: keyof ReputationBreakdown; label: string; points: number }[] = [
+  { key: 'publishedStories', label: 'Published stories you started', points: REPUTATION.publishedStory },
+  { key: 'linkedSources', label: `Linked sources on them (up to ${REPUTATION.sourcesPerStoryMax} per story)`, points: REPUTATION.linkedSource },
+  { key: 'improvedStories', label: "Other people's stories you improved (once each)", points: REPUTATION.improvedStory },
+  { key: 'developments', label: `Timeline developments accepted (up to ${REPUTATION.developmentsPerStoryMax} per story)`, points: REPUTATION.development },
+  { key: 'correctionsAccepted', label: 'Your corrections accepted', points: REPUTATION.correctionAccepted },
+  { key: 'activeWeeks', label: 'Weeks with accepted work', points: REPUTATION.activeWeek },
+  { key: 'correctionsRejected', label: 'Your corrections rejected', points: REPUTATION.correctionRejected },
+  { key: 'editsRejected', label: 'Your stories or edits turned down', points: REPUTATION.editRejected },
+  { key: 'correctedStories', label: 'Corrections accepted on your stories', points: REPUTATION.correctedStory },
+  { key: 'removed', label: 'Your versions, developments or stories removed', points: REPUTATION.removed },
+];
+
+function ReputationBreakdownList({ breakdown }: { breakdown: ReputationBreakdown }) {
+  const rows = BREAKDOWN.filter((r) => breakdown[r.key] > 0);
+  if (!rows.length) return <p className="small">Nothing yet. Your first published story or accepted correction starts it off.</p>;
+  return (
+    <table className="reputation-table small">
+      <caption className="visually-hidden">How your reputation adds up</caption>
+      <tbody>
+        {rows.map((r) => {
+          // Active weeks count only up to a cap.
+          const n = r.key === 'activeWeeks' ? Math.min(breakdown[r.key], REPUTATION.activeWeeksMax) : breakdown[r.key];
+          const total = n * r.points;
+          return (
+            <tr key={r.key}>
+              <th scope="row">{r.label}</th>
+              <td className="muted">{breakdown[r.key]} × {r.points > 0 ? `+${r.points}` : `−${-r.points}`}</td>
+              <td className={total < 0 ? 'reputation-minus' : 'reputation-plus'}>{total > 0 ? `+${total}` : `−${-total}`}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }
 

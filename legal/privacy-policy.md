@@ -11,19 +11,24 @@ This policy explains what Hexstory collects and how it is used.
 | Google account ID and email address | Google sign-in | Create and identify your account; contact you about it |
 | First name from Google | Google sign-in | Only used once, to suggest a display name. Not stored |
 | Display name (any name you choose) | You | Shown publicly next to your contributions |
-| Stories, edits, sources, images, chat messages, reports | You | Provide the Service; all but reports are **public** (see below) |
+| Stories, edits, timeline developments, corrections, collections, sources, images, reports | You | Provide the Service; all but reports are **public** (see below) |
 | Moderation records: reports, requests to ban someone, and moderator actions (such as approvals, removals and bans, with their reasons) | You, reviewers and moderators | Keep the Service safe and make moderation accountable. Visible only to reviewers and moderators |
 | IP address, browser info, timestamps | Automatically | Security, rate limiting, abuse and ban enforcement |
 | Session cookie | Automatically | Keep you signed in |
 
 We remove location and camera metadata (EXIF) from uploaded images before storing them.
 
+**History near me.** If you use "History near me", your browser asks for permission to share your location.
+The location is used only on your device, to find the nearest stories among those already loaded in your
+browser. It is never sent to Hexstory or stored by us.
+
 We do not store your Google profile picture or full name. We do not use advertising trackers and we do not sell your personal data.
 
 ## What is public
 
-Your display name, published stories, accepted edits (including the version history), uploaded images and chat
-messages are visible to everyone. Your profile page shows your display name, your role (such as Member or
+Your display name, published stories, accepted edits (including the version history), accepted timeline
+developments, corrections you propose (with their evidence and outcome), collections you start and uploaded
+images are visible to everyone. Your profile page shows your display name, your role (such as Member or
 Reviewer) and the date you joined.
 
 Some things are not public:
@@ -51,7 +56,8 @@ Your email address is never shown publicly.
 - Contributions: kept indefinitely because they are licensed under CC BY-SA 4.0 and form part of
   the shared history. When you delete your account, your name on them is replaced with
   "Deleted user".
-- Chat messages: [RETENTION PERIOD, e.g. 1 year], then deleted.
+- Messages from the live chat Hexstory used to offer: no longer shown to anyone; kept only as moderation
+  records. You can ask us to delete yours.
 - IP and security logs: up to 90 days, longer if tied to an abuse investigation.
 
 ## Your rights

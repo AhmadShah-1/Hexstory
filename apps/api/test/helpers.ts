@@ -48,14 +48,13 @@ export const testConfig = () =>
 /** Another app instance over the same database, e.g. with failing storage or a shared coordinator. */
 export async function buildTestApp(
   sql: Sql,
-  overrides: { storage?: Storage; coordinator?: Coordinator; heartbeatMs?: number } = {},
+  overrides: { storage?: Storage; coordinator?: Coordinator } = {},
 ) {
   return buildApp({
     config: testConfig(),
     sql,
     storage: overrides.storage ?? createLocalStorage(await mkdtemp(join(tmpdir(), 'hexstory-test-'))),
     coordinator: overrides.coordinator ?? createMemoryCoordinator(),
-    heartbeatMs: overrides.heartbeatMs,
   });
 }
 
@@ -91,6 +90,9 @@ export const PARIS = cellAt(48.8566, 2.3522, 5);
 export function storyInput({ body, ...overrides }: Partial<CreateStoryInput> & { body?: string } = {}): CreateStoryInput {
   return {
     title: 'The storming of the Bastille',
+    summary: 'A Paris crowd seized the Bastille fortress, a flashpoint of the French Revolution.',
+    categories: ['protest'],
+    location: { lat: 48.8532, lng: 2.3692, placeName: 'Bastille, Paris' },
     content: legacyDoc(
       body ?? 'On 14 July 1789 a crowd stormed the Bastille fortress in Paris, a flashpoint of the French Revolution.',
       null,

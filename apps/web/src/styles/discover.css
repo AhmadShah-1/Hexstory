@@ -1,0 +1,164 @@
+/* Discovery: map controls, the home panel, explore and near-me lists (see global.css for tokens). */
+
+/* ---------- Map tooltip ---------- */
+.map-tooltip .maplibregl-popup-content {
+  padding: 5px 9px; border-radius: 8px; font: 600 13px/1.35 var(--serif); color: var(--ink);
+  box-shadow: var(--shadow); pointer-events: none;
+}
+.map-tooltip .maplibregl-popup-tip { display: none; }
+.map-tooltip { pointer-events: none; }
+
+/* ---------- Map controls: timeline, categories, layers ---------- */
+.map-controls {
+  position: absolute; left: 14px; bottom: 44px; z-index: 5;
+  width: min(640px, calc(100vw - var(--panel-width) - 60px));
+}
+.app:not(:has(.panel)) .map-controls { width: min(640px, calc(100vw - 90px)); }
+.map-controls-pill, .map-controls-close, .map-controls-done { display: none; }
+.map-controls-body {
+  background: rgba(255, 255, 255, 0.96); border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 10px 14px; display: flex; flex-direction: column; gap: 10px;
+  max-height: calc(100vh - 140px); overflow-y: auto; overscroll-behavior: contain;
+}
+.map-controls-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.map-controls-summary { font-size: 13.5px; flex: 1; min-width: 120px; }
+.map-controls-more-toggle { font-size: 13px; }
+.map-controls-heading { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 4px; }
+.map-controls-more { display: grid; gap: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+.map-controls-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+.segmented-pills { display: inline-flex; padding: 2px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); }
+.segmented-pills button {
+  border: 0; background: none; padding: 4px 11px; border-radius: 999px; font-size: 13px; cursor: pointer; color: var(--muted);
+}
+.segmented-pills button[aria-pressed='true'] { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(28, 25, 23, 0.15); }
+
+.map-timeline { flex-wrap: nowrap; }
+.timeline-slider, .range-slider { flex: 1; min-width: 0; }
+.timeline-slider { accent-color: var(--accent); }
+.timeline-years { display: flex; align-items: center; gap: 4px; flex: none; }
+/* Keep the year boxes compact so the slider gets the width (generic input rules would stretch them). */
+.timeline-years .year-input { flex: none; width: auto; }
+.map-controls .map-timeline .timeline-years .year-input input { width: 76px; flex: none; }
+.year-input input {
+  width: 72px; padding: 4px 6px; border: 1px solid var(--line); border-radius: var(--radius-sm); text-align: right;
+  font-variant-numeric: tabular-nums; background: var(--surface);
+}
+
+/* Range inputs are not text boxes: undo the general text-input rule (global.css), which outranks a plain
+   `input[type=range]` selector. Tied specificity, and this file loads later, so these win. */
+.map-controls .map-timeline input[type='range'] { padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
+.map-controls .map-timeline input.timeline-slider { width: auto; }
+.map-controls .range-slider input[type='range'] { width: 100%; }
+
+/* Two overlaid range inputs make one two-thumb slider; only the thumbs take the pointer. */
+.range-slider { position: relative; height: 24px; }
+.range-slider::before, .range-slider::after {
+  content: ''; position: absolute; top: 50%; height: 4px; margin-top: -2px; border-radius: 2px;
+}
+.range-slider::before { left: 0; right: 0; background: var(--line); }
+.range-slider::after { left: var(--a); right: calc(100% - var(--b)); background: var(--accent); }
+.range-slider input {
+  position: absolute; inset: 0; width: 100%; margin: 0; background: none; pointer-events: none;
+  -webkit-appearance: none; appearance: none; z-index: 1;
+}
+.range-slider input::-webkit-slider-runnable-track { background: none; }
+.range-slider input::-moz-range-track { background: none; }
+.range-slider input::-webkit-slider-thumb {
+  -webkit-appearance: none; pointer-events: auto; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--surface); border: 2px solid var(--accent); cursor: grab; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.range-slider input::-moz-range-thumb {
+  pointer-events: auto; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--surface); border: 2px solid var(--accent); cursor: grab;
+}
+
+.layer-options { display: grid; gap: 4px; }
+.layer-option {
+  display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer;
+  border: 1px solid transparent;
+}
+.layer-option:hover { background: var(--surface-2); }
+.layer-option.is-on { border-color: var(--line); background: var(--surface-2); }
+.layer-option input { margin-top: 3px; accent-color: var(--accent); }
+.layer-option > span { display: flex; flex-direction: column; }
+.layer-name { font-size: 14px; font-weight: 600; }
+
+.map-legend { margin-top: 8px; font-size: 12.5px; color: #44403c; }
+.legend-row { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.legend-row li { display: inline-flex; align-items: center; gap: 5px; }
+.legend-swatch { display: inline-block; width: 11px; height: 11px; border-radius: 50%; border: 1px solid rgba(0, 0, 0, 0.12); vertical-align: -1px; }
+.legend-row .legend-swatch { border-radius: 3px; }
+.map-legend > .legend-swatch { margin-right: 4px; }
+.legend-ring { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent); }
+
+/* ---------- Home ---------- */
+.discover-pill { position: absolute; right: 14px; top: 64px; z-index: 5; background: var(--ink); color: #fff; }
+.discover-pill:hover { background: #292524; }
+.home { padding-bottom: 12px; }
+.discover-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 14px 16px 6px; }
+.discover-action {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+  color: var(--ink); cursor: pointer; font: inherit;
+}
+.discover-action:hover { background: var(--surface-2); border-color: #d6d3d1; text-decoration: none; }
+.discover-action:disabled { opacity: 0.6; cursor: progress; }
+.discover-action-title { font-weight: 650; font-size: 14.5px; }
+
+.young-site { margin: 10px 16px; padding: 14px 16px; border-radius: 12px; background: var(--accent-soft); display: grid; gap: 8px; }
+.young-site-title { font-family: var(--serif); font-size: 17px; font-weight: 650; }
+
+.home-section { padding: 12px 8px 4px; border-top: 1px solid var(--line); margin-top: 8px; }
+.home-section:first-of-type { border-top: 0; }
+.home-section-head { display: flex; flex-direction: column; padding: 0 12px 4px; }
+.home-section-head .section-label { margin: 0; }
+.home-more { display: inline-block; padding: 4px 12px 6px; }
+.home-foot { padding: 12px 20px 0; }
+
+.home-collections { list-style: none; margin: 0; padding: 4px 12px; display: grid; gap: 8px; }
+.home-collection {
+  display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--line); color: var(--ink);
+}
+.home-collection:hover { background: var(--surface-2); text-decoration: none; }
+.home-collection-kind { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.home-collection-title { font-family: var(--serif); font-weight: 650; font-size: 15.5px; }
+.home-collection-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* ---------- Explore, near me, a region ---------- */
+.explore-head, .hex-list-head { display: grid; gap: 8px; padding: 12px 12px 6px; }
+.hex-list-head { padding: 4px 0 6px; }
+.explore-search { display: flex; gap: 6px; }
+.explore-search input {
+  flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface);
+}
+.near-row { position: relative; }
+.near-distance { display: block; padding: 0 12px 8px 80px; margin-top: -6px; }
+.near-fallback { justify-content: center; margin-top: 12px; }
+
+/* ---------- Phones ---------- */
+@media (max-width: 720px) {
+  .map-controls { width: auto; right: auto; bottom: 44px; }
+  .app:has(.panel) .map-controls { bottom: calc(58vh + 10px); }
+  .app:not(:has(.panel)) .map-controls { width: auto; }
+  .map-controls-pill { display: inline-flex; font-size: 13.5px; padding: 7px 14px; }
+  .map-controls-body { display: none; }
+  .map-controls.is-open .map-controls-pill { display: none; }
+  /* The sheet's own z-index only counts inside this element's stacking context: lift the whole control
+     above the panel's bottom sheet while it is open. */
+  .map-controls.is-open { z-index: 20; }
+  .map-controls.is-open .map-controls-body {
+    display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 8;
+    max-height: 82vh; border-radius: var(--radius) var(--radius) 0 0; padding: 14px 16px 18px;
+    animation: sheet-in 0.25s ease-out;
+  }
+  .map-controls-close { display: inline-block; margin-left: auto; }
+  .map-controls-more-toggle { display: none; }
+  .map-controls-done { display: inline-flex; }
+  .map-timeline { flex-wrap: wrap; }
+  .timeline-slider, .range-slider { flex-basis: 100%; }
+  /* Below the place search bar, clear of the zoom buttons and the filters button. */
+  .discover-pill { top: 112px; right: 14px; }
+  .discover-actions { padding: 12px 12px 4px; }
+}

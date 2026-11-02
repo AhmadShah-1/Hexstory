@@ -1,13 +1,48 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { getResolution } from 'h3-js';
-import { LIMITS, toBaseCells } from '@hexstory/shared';
+import { LIMITS, toBaseCells, type Category } from '@hexstory/shared';
+import type { StoryFilters } from '../api/queries';
 import { cellsBounds } from './geo';
 
 /** Zoom at which a cell of each resolution is the one shown (inverse of resForZoom). */
 const ZOOM_FOR_RES: Record<number, number> = { 0: 2, 1: 2.5, 2: 3, 3: 4.2, 4: 5.7, 5: 7 };
 
 export type MapMode = 'browse' | 'select';
+
+/**
+ * What the map draws. `events`: one neutral dot per story. `density`: hexagons shaded by how many
+ * stories were written there (not how important a place is). `category` / `period`: dots coloured by
+ * kind of event or by era. `developing`: only ongoing events and those with recent developments.
+ */
+export const MAP_LAYERS = ['events', 'density', 'category', 'period', 'developing'] as const;
+export type MapLayer = (typeof MAP_LAYERS)[number];
+
+/** Time and category filters; they apply to the map and to every list that follows the map. */
+export interface MapFilters {
+  /** Inclusive years; null = open. */
+  from: number | null;
+  to: number | null;
+  categories: Category[];
+}
+export const NO_FILTERS: MapFilters = { from: null, to: null, categories: [] };
+export const hasFilters = (f: MapFilters) => f.from !== null || f.to !== null || f.categories.length > 0;
+/** The filters as list query parameters. */
+export const filtersQuery = (f: MapFilters): StoryFilters => ({
+  from: f.from ?? undefined,
+  to: f.to ?? undefined,
+  categories: f.categories.length ? f.categories : undefined,
+});
+
+export type LatLng = { lat: number; lng: number };
+/** A labelled point drawn on top of the stories, e.g. a development of the story being read. */
+export interface MapMarker extends LatLng {
+  id: string;
+  label: string;
+}
+
+/** In select mode (the editors): clicks set the story's point, or add/remove hexagons of its area. */
+export type SelectTool = 'point' | 'area';
 
 interface MapContextValue {
   /** 'select' while the story editor is open: clicks toggle regions instead of opening them. */
@@ -18,12 +53,35 @@ interface MapContextValue {
   setSelection(cells: Iterable<string>): void;
   /** Adds or removes a clicked display cell; returns false if the area would become too large. */
   toggleCell(cell: string): boolean;
+  /** Most base cells the selection may hold: stories' LIMITS.cellsMax by default; collections allow more. */
+  setSelectionLimit(limit: number): void;
   /** The hex whose panel is open. */
   activeCell: string | null;
   setActiveCell(cell: string | null): void;
   /** Compact cells of the story being read, drawn as its footprint. */
   storyCells: string[];
   setStoryCells(cells: string[]): void;
+  /** Point of the story being read, drawn as a pin. */
+  storyPoint: LatLng | null;
+  setStoryPoint(point: LatLng | null): void;
+  /** Extra labelled points (a story's developments). */
+  markers: MapMarker[];
+  setMarkers(markers: MapMarker[]): void;
+  /** Story ids to emphasise (e.g. a collection being read); the rest fade. Null: none. */
+  highlight: string[] | null;
+  setHighlight(ids: string[] | null): void;
+  /** What the map draws, and the time/category filters (shared with lists). */
+  layer: MapLayer;
+  setLayer(layer: MapLayer): void;
+  filters: MapFilters;
+  setFilters(next: MapFilters | ((prev: MapFilters) => MapFilters)): void;
+  /** Select mode: which tool clicks use, and the point being placed. */
+  tool: SelectTool;
+  setTool(tool: SelectTool): void;
+  point: LatLng | null;
+  setPoint(point: LatLng | null): void;
+  /** Moves the map to show these points (beside the panel), like focusCells. */
+  focusPoints(points: LatLng[], opts?: { onlyIfHidden?: boolean; maxZoom?: number }): void;
   /**
    * Moves the map so these cells are visible beside the panel. With `onlyIfHidden`, the camera
    * stays put when they are already in view, so it never jumps right after a click.
@@ -58,16 +116,38 @@ export function MapProvider({ children }: { children: ReactNode }) {
   selectionRef.current = selection;
   const [activeCell, setActiveCell] = useState<string | null>(null);
   const [storyCells, setStoryCells] = useState<string[]>([]);
+  const [storyPoint, setStoryPoint] = useState<LatLng | null>(null);
+  const [markers, setMarkers] = useState<MapMarker[]>([]);
+  const [highlight, setHighlight] = useState<string[] | null>(null);
+  const [layer, setLayerState] = useState<MapLayer>(readLayer);
+  const [filters, setFilters] = useState<MapFilters>(NO_FILTERS);
+  const [tool, setTool] = useState<SelectTool>('point');
+  const [point, setPoint] = useState<LatLng | null>(null);
+  const setLayer = useCallback((next: MapLayer) => {
+    setLayerState(next);
+    try {
+      localStorage.setItem(LAYER_KEY, next);
+    } catch {
+      /* storage unavailable: the choice lasts this visit */
+    }
+  }, []);
 
   const setSelection = useCallback((cells: Iterable<string>) => setSelectionState(new Set(cells)), []);
+
+  const limitRef = useRef<number>(LIMITS.cellsMax);
+  const setSelectionLimit = useCallback((limit: number) => {
+    limitRef.current = limit;
+  }, []);
 
   const toggleCell = useCallback((cell: string) => {
     const children = toBaseCells([cell]);
     const prev = selectionRef.current;
     const next = new Set(prev);
-    if (children.every((c) => prev.has(c))) children.forEach((c) => next.delete(c));
+    const removing = children.every((c) => prev.has(c));
+    if (removing) children.forEach((c) => next.delete(c));
     else children.forEach((c) => next.add(c));
-    if (next.size > LIMITS.cellsMax) return false;
+    // Removing is always allowed, so an area that is already too big can still be trimmed.
+    if (!removing && next.size > limitRef.current) return false;
     selectionRef.current = next;
     setSelectionState(next);
     return true;
@@ -87,6 +167,18 @@ export function MapProvider({ children }: { children: ReactNode }) {
     else pendingFocus.current = () => mapRef.current && run(mapRef.current);
   }, []);
 
+  const focusPoints = useCallback((points: LatLng[], opts: { onlyIfHidden?: boolean; maxZoom?: number } = {}) => {
+    if (!points.length) return;
+    const lngs = points.map((p) => p.lng), lats = points.map((p) => p.lat);
+    const bounds: [[number, number], [number, number]] = [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]];
+    const run = (map: MapLibreMap) => {
+      if (opts.onlyIfHidden && boundsVisible(map, bounds)) return;
+      map.fitBounds(bounds, { padding: panelPadding(), maxZoom: opts.maxZoom ?? (points.length === 1 ? 7 : 9), duration: 900 });
+    };
+    if (mapRef.current) run(mapRef.current);
+    else pendingFocus.current = () => mapRef.current && run(mapRef.current);
+  }, []);
+
   const registerMap = useCallback((map: MapLibreMap | null) => {
     mapRef.current = map;
     if (map && pendingFocus.current) {
@@ -97,12 +189,25 @@ export function MapProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(
     () => ({
-      mode, setMode, selection, setSelection, toggleCell, activeCell, setActiveCell,
-      storyCells, setStoryCells, focusCells, registerMap,
+      mode, setMode, selection, setSelection, toggleCell, setSelectionLimit, activeCell, setActiveCell,
+      storyCells, setStoryCells, storyPoint, setStoryPoint, markers, setMarkers, highlight, setHighlight,
+      layer, setLayer, filters, setFilters, tool, setTool, point, setPoint,
+      focusCells, focusPoints, registerMap,
     }),
-    [mode, selection, setSelection, toggleCell, activeCell, storyCells, focusCells, registerMap],
+    [mode, selection, setSelection, toggleCell, setSelectionLimit, activeCell, storyCells, storyPoint, markers, highlight,
+      layer, setLayer, filters, tool, point, focusCells, focusPoints, registerMap],
   );
   return <MapContext.Provider value={value}>{children}</MapContext.Provider>;
+}
+
+const LAYER_KEY = 'hexstory:map-layer';
+function readLayer(): MapLayer {
+  try {
+    const saved = localStorage.getItem(LAYER_KEY);
+    return (MAP_LAYERS as readonly string[]).includes(saved ?? '') ? (saved as MapLayer) : 'events';
+  } catch {
+    return 'events';
+  }
 }
 
 /** True when the bounds' corners all project inside the part of the map not covered by the panel. */

@@ -1,15 +1,31 @@
 import { cellToChildren, getRes0Cells, polygonToCells } from 'h3-js';
-import type { FeatureCollection, Polygon } from 'geojson';
+import type { FeatureCollection, Point, Polygon } from 'geojson';
 import { cellRing } from '@hexstory/shared';
 
-export type CellFeatures = FeatureCollection<Polygon, { cell: string; count?: number }>;
+export type CellFeatures = FeatureCollection<Polygon, { cell: string; count?: number; color?: string }>;
+export type PointFeatures<P extends object = Record<string, unknown>> = FeatureCollection<Point, P>;
 
-export function cellsToFeatures(cells: Iterable<string>, counts?: Map<string, number>): CellFeatures {
+/** GeoJSON points ([lng, lat]) with whatever properties the layer styles read. */
+export function pointsToFeatures<T extends { lat: number; lng: number }, P extends object>(
+  items: readonly T[],
+  props: (item: T) => P,
+): PointFeatures<P> {
+  return {
+    type: 'FeatureCollection',
+    features: items.map((item) => ({
+      type: 'Feature',
+      properties: props(item),
+      geometry: { type: 'Point', coordinates: [item.lng, item.lat] },
+    })),
+  };
+}
+
+export function cellsToFeatures(cells: Iterable<string>, counts?: Map<string, number>, colors?: Map<string, string>): CellFeatures {
   const features: CellFeatures['features'] = [];
   for (const cell of cells) {
     features.push({
       type: 'Feature',
-      properties: { cell, count: counts?.get(cell) },
+      properties: { cell, count: counts?.get(cell), color: colors?.get(cell) },
       geometry: { type: 'Polygon', coordinates: [cellRing(cell)] },
     });
   }

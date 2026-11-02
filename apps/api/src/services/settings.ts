@@ -25,7 +25,7 @@ export function forgetRules(): void {
 }
 
 /**
- * Saves new values for the editable rules (promotion thresholds, the new-account chat wait). Nobody is
+ * Saves new values for the editable rules (promotion thresholds). Nobody is
  * re-evaluated on the spot: promotion is re-checked at each person's next accepted contribution or
  * sign-in, and lowering a requirement never demotes anyone.
  */

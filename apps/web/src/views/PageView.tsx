@@ -1,7 +1,7 @@
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Link, useNavigate } from 'react-router';
-import { LIMITS } from '@hexstory/shared';
+import { LIMITS, REPUTATION } from '@hexstory/shared';
 import { useRules } from '../api/queries';
 import { closePage } from '../lib/navigation';
 import { Modal } from '../components/Modal';
@@ -14,7 +14,8 @@ export type PageName = keyof typeof PAGES;
 
 /**
  * Fills `{{storiesPerDay.1}}`-style tokens from the rules in force (`/api/rules`, which includes any
- * Moderator changes) and `{{limits.bodyMax}}`-style ones from LIMITS, so the numbers on the page are
+ * Moderator changes), `{{limits.bodyMax}}`-style ones from LIMITS and `{{reputation.publishedStory}}`-style
+ * ones from REPUTATION (negative weights also as `{{reputation.less.removed}}`, without the minus sign), so the numbers on the page are
  * the ones the API enforces. Unknown tokens are left as they are, so a typo is visible rather than
  * silently blank.
  */
@@ -30,7 +31,12 @@ function fillRules(text: string, source: object): string {
 export function PageView({ page }: { page: PageName }) {
   const navigate = useNavigate();
   const rules = useRules().data;
-  const text = fillRules(PAGES[page], { ...rules, limits: { ...LIMITS, contentKilobytesMax: LIMITS.contentBytesMax / 1024, imageMegabytesMax: LIMITS.imageBytesMax / 1024 / 1024 } });
+  const reputation = { ...REPUTATION, less: Object.fromEntries(Object.entries(REPUTATION).map(([k, v]) => [k, Math.abs(v)])) };
+  const text = fillRules(PAGES[page], {
+    ...rules,
+    limits: { ...LIMITS, contentKilobytesMax: LIMITS.contentBytesMax / 1024, imageMegabytesMax: LIMITS.imageBytesMax / 1024 / 1024 },
+    reputation,
+  });
   const [, title, body] = text.match(/^# (.+)\n([\s\S]*)$/) ?? [null, page, text];
   return (
     <Modal open onClose={() => closePage(navigate)} title={title ?? ''}>

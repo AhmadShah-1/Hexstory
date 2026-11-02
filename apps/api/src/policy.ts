@@ -13,22 +13,16 @@ export const POLICY = {
   /** Upload slots a user can request per hour (completing allows twice this, for retries). */
   uploadsPerHour: 20,
   reportsPerDay: RULES.reportsPerDay,
-  /** Socket.IO events (join/leave/send) one connection may emit per 10 seconds before being dropped. */
-  socketEventsPer10s: 30,
-  /** Open Square connections one address may hold on one instance. */
-  socketConnectionsPerIp: 20,
-  /** New Square connections one address may open per minute, across all instances. */
-  socketHandshakesPerMinute: 60,
-  /** Minimum gap between chat messages from one user. */
-  chatIntervalMs: 2_000,
+  correctionsPerDay: RULES.correctionsPerDay,
+  collectionsPerDay: RULES.collectionsPerDay,
   largeRemovalRatio: RULES.largeRemovalPercent / 100,
   newcomerMaxLinks: RULES.newcomerMaxLinks,
   uploadsPerDay: RULES.uploadsPerDay,
   uploadMegabytesPerDay: RULES.uploadMegabytesPerDay,
-  // Promotion thresholds and the new-account chat wait can be changed by Moderators at runtime:
-  // read them with getRules() (services/settings.ts), never from RULES directly.
-  /** Chat messages from the last this-many hours are removed live from open Squares when their author is banned. */
-  banLiveHideHours: 24,
+  // Promotion thresholds can be changed by Moderators at runtime: read them with getRules()
+  // (services/settings.ts), never from RULES directly.
+  /** Random picks ("Surprise me") favour stories with at least this many sources. */
+  surpriseMinSources: 2,
 } as const;
 
 export interface Actor {
@@ -66,24 +60,21 @@ export function nextEarnedLevel(current: number): TrustLevel | null {
   return null;
 }
 
+/** What promotion looks at: reputation (see REPUTATION in packages/shared/src/rules.ts) and breadth. */
+export interface PromotionStanding {
+  reputation: number;
+  /** Published stories started by someone else that they improved or corrected. */
+  others: number;
+  /** Weeks in which something of theirs was accepted. */
+  activeWeeks: number;
+}
+
+const meets = (ageDays: number, s: PromotionStanding, step: Rules['promotion']['member']) =>
+  ageDays >= step.minAgeDays && s.reputation >= step.minReputation && s.others >= step.minOthers && s.activeWeeks >= step.minActiveWeeks;
+
 /** Trust level earned automatically from history. Never demotes; moderators are set by ADMIN_EMAILS. */
-export function earnedTrustLevel(
-  current: number,
-  ageDays: number,
-  contributions: { stories: number; othersStories: number },
-  promotion: Rules['promotion'],
-): TrustLevel {
-  const { member, reviewer } = promotion;
-  let level: number = current;
-  if (
-    level < TRUST.REVIEWER &&
-    ageDays >= reviewer.minAgeDays &&
-    contributions.stories >= reviewer.minStories &&
-    contributions.othersStories >= reviewer.minOthersStories
-  ) {
-    level = TRUST.REVIEWER;
-  } else if (level < TRUST.MEMBER && ageDays >= member.minAgeDays && contributions.stories >= member.minStories) {
-    level = TRUST.MEMBER;
-  }
-  return level as TrustLevel;
+export function earnedTrustLevel(current: number, ageDays: number, standing: PromotionStanding, promotion: Rules['promotion']): TrustLevel {
+  if (current < TRUST.REVIEWER && meets(ageDays, standing, promotion.reviewer)) return TRUST.REVIEWER;
+  if (current < TRUST.MEMBER && meets(ageDays, standing, promotion.member)) return TRUST.MEMBER;
+  return current as TrustLevel;
 }

@@ -4,8 +4,9 @@ import { createReportSchema, type WatchtowerData } from '@hexstory/shared';
 import { forbidden } from '../errors.js';
 import { parse, requireWriter } from '../http.js';
 import { canReview } from '../policy.js';
+import { openCorrections } from '../services/corrections.js';
+import { pendingDevelopments } from '../services/developments.js';
 import { createReport, openReports, resolveReport } from '../services/reports.js';
-import { hideMessage } from '../services/square.js';
 import { pendingForReview, unreviewedStories } from '../services/stories.js';
 import type { Deps } from './deps.js';
 
@@ -15,7 +16,7 @@ const reason = z.string().trim().max(500).nullish();
 export const moderationRoutes =
   (deps: Deps): FastifyPluginAsync =>
   async (app) => {
-    const { sql, square } = deps;
+    const { sql } = deps;
 
     app.post('/api/reports', async (req, reply) => {
       const user = requireWriter(req);
@@ -26,12 +27,14 @@ export const moderationRoutes =
     app.get('/api/watchtower', async (req): Promise<WatchtowerData> => {
       const user = requireWriter(req);
       if (!canReview(user.trustLevel)) throw forbidden();
-      const [pending, unreviewed, reports] = await Promise.all([
+      const [pending, unreviewed, reports, developments, corrections] = await Promise.all([
         pendingForReview(deps),
         unreviewedStories(deps),
         openReports(sql),
+        pendingDevelopments(sql),
+        openCorrections(sql),
       ]);
-      return { pending, unreviewed, reports };
+      return { pending, unreviewed, reports, developments, corrections };
     });
 
     app.post('/api/reports/:id/resolve', async (req) => {
@@ -39,17 +42,6 @@ export const moderationRoutes =
       const { id } = parse(idParams, req.params);
       const { resolution } = parse(z.object({ resolution: z.enum(['dismissed', 'actioned']) }), req.body);
       await resolveReport(sql, user, id, resolution);
-      return { ok: true };
-    });
-
-    app.post('/api/messages/:id/hide', async (req) => {
-      const user = requireWriter(req);
-      const { id } = parse(idParams, req.params);
-      const body = parse(z.object({ reason }), req.body ?? {});
-      const { cell } = await hideMessage(sql, user, id, body.reason ?? null);
-      // The database is authoritative: if the live relay fails, clients drop the message when they
-      // next refetch history (on reconnect or resync).
-      await square.messageHidden(cell, id).catch((err) => req.log.error({ err }, 'square: hide relay failed'));
       return { ok: true };
     });
   };

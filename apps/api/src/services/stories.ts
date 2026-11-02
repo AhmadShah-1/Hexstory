@@ -1,25 +1,39 @@
 import {
+  BASE_RES,
+  DEVELOPING_DAYS,
+  HISTORICAL_GAP_DAYS,
+  INVERSE_RELATION,
   LIMITS,
   TRUST,
   baseCellCount,
+  cellAt,
+  cellsCenter,
   compact,
   docImageKeys,
   docLinkCount,
   docToPlainText,
+  eventRange,
   indexCells,
   legacyDoc,
   toBaseCells,
   uncompact,
-  type CellCount,
+  yearRangeKeys,
+  type Category,
+  type CollectionRef,
   type ContributionEdit,
   type ContributionStory,
-  type CreateStoryInput,
-  type EditStoryInput,
+  type EditStoryData,
+  type LinkRelation,
+  type MapPoint,
   type Page,
   type RevisionListItem,
   type RevisionStatus,
   type RichDoc,
+  type StoryConnection,
   type StoryDetail,
+  type StoryInput,
+  type StoryListQuery,
+  type StoryRef,
   type StoryRevision,
   type StoryStatus,
   type StorySummary,
@@ -27,11 +41,14 @@ import {
   type UnreviewedStory,
   type WriteResult,
 } from '@hexstory/shared';
+import type { z } from 'zod';
+import type { storyListQuerySchema } from '@hexstory/shared';
 import type { SessionUser } from '../auth/sessions.js';
 import type { Db, Sql } from '../db.js';
 import { badRequest, conflict, forbidden, notFound, tooMany } from '../errors.js';
 import { POLICY, canReview, detectFlags, liveEditThreshold } from '../policy.js';
 import { imageFileNames, type Storage } from '../storage/index.js';
+import { listDevelopments } from './developments.js';
 import { logModAction } from './modlog.js';
 import { refreshTrust } from './users.js';
 
@@ -51,6 +68,13 @@ interface RevisionRow {
   imageKey: string | null;
   imageCredit: string | null;
   content: RichDoc | null;
+  summary: string | null;
+  categories: Category[];
+  lat: number | null;
+  lng: number | null;
+  placeName: string | null;
+  people: string[];
+  links: { storyId: string; relation: LinkRelation }[];
   cells: string[];
   startYear: number;
   startMonth: number | null;
@@ -79,6 +103,8 @@ export interface StoryRow {
   /** When the story first became public, and the version public at that moment (null: never published). */
   publishedAt: Date | null;
   publishedRevisionId: string | null;
+  lastUpdateAt: Date;
+  featuredAt: Date | null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -110,11 +136,16 @@ function toRevision(storage: Storage, r: RevisionRow): StoryRevision {
     body: r.body,
     content: withImageUrls(storage, r.content ?? legacyDoc(r.body, r.imageKey, r.imageCredit)),
     thumbUrl: imageUrls(storage, r.imageKey).thumbUrl,
+    summary: r.summary,
+    categories: r.categories,
+    location: r.lat === null || r.lng === null ? null : { lat: r.lat, lng: r.lng, placeName: r.placeName },
     cells: r.cells,
     ...datesOf(r),
     isOngoing: r.isOngoing,
     isApprox: r.isApprox,
     sources: r.sources,
+    people: r.people,
+    links: r.links,
     status: r.status,
     editSummary: r.editSummary,
     flags: r.flags,
@@ -128,6 +159,7 @@ async function fetchRevisions(sql: Db, where: ReturnType<Db>): Promise<RevisionR
   return sql<RevisionRow[]>`
     SELECT r.id, r.story_id, r.parent_revision_id, r.author_id, u.display_name AS author_name,
            r.title, r.body, r.content, r.image_key, r.image_credit, r.cells,
+           r.summary, r.categories, r.lat, r.lng, r.place_name, r.people, r.links,
            r.start_year, r.start_month, r.start_day, r.end_year, r.end_month, r.end_day,
            r.is_ongoing, r.is_approx, r.sources, r.status, r.edit_summary, r.flags, r.hidden_at, r.created_at
     FROM story_revisions r JOIN users u ON u.id = r.author_id
@@ -147,84 +179,193 @@ export async function fetchStory(sql: Db, id: string, lock = false): Promise<Sto
 }
 
 // ---------------------------------------------------------------------------------------------
-// Map counts (cached briefly; every zoom change asks for them)
+// SQL building blocks. `s` is a story and `r` its current revision in every fragment below.
 
-const COUNT_TTL_MS = 10_000;
-const countCache = new Map<number, { at: number; data: CellCount[] }>();
+/** First moment the event touches, as a comparable key; mirrors eventRange() in packages/shared. */
+export const loKeySql = (sql: Db) => sql`(r.start_year * 10000 + COALESCE(r.start_month, 1) * 100 + COALESCE(r.start_day, 1))`;
+/** Last moment the event touches; ongoing events never end. */
+export const hiKeySql = (sql: Db) => sql`(CASE WHEN r.is_ongoing THEN 2147483647 ELSE
+  COALESCE(r.end_year, r.start_year) * 10000
+  + COALESCE(CASE WHEN r.end_year IS NULL THEN r.start_month ELSE r.end_month END, 12) * 100
+  + COALESCE(CASE WHEN r.end_year IS NULL THEN r.start_day ELSE r.end_day END, 31) END)`;
 
-export function invalidateCellCounts(): void {
-  countCache.clear();
+/** An account of an older event, newly added: its last date is more than a year before publication. */
+const historicalSql = (sql: Db) => sql`(NOT r.is_ongoing AND ${hiKeySql(sql)}
+  < to_char(COALESCE(s.published_at, s.created_at) - make_interval(days => ${HISTORICAL_GAP_DAYS}), 'YYYYMMDD')::int)`;
+
+/** Ongoing, or had a development recently. */
+const developingSql = (sql: Db) => sql`(r.is_ongoing OR EXISTS (
+  SELECT 1 FROM story_developments d WHERE d.story_id = s.id AND d.status = 'accepted' AND d.hidden_at IS NULL
+    AND d.created_at > now() - make_interval(days => ${DEVELOPING_DAYS})))`;
+
+/**
+ * "Historical significance" as the community has recorded it: how many published stories link to this
+ * one (as cause, part or consequence), how much its timeline has developed, how well it is sourced, and
+ * whether reviewers featured it. It deliberately ignores how many stories a place has.
+ */
+export const significanceSql = (sql: Db) => sql`(
+  3 * (SELECT count(*) FROM story_links l JOIN stories ls ON ls.id = l.from_story_id WHERE l.to_story_id = s.id AND ls.status = 'active')
+  + 2 * LEAST(10, (SELECT count(*) FROM story_developments d WHERE d.story_id = s.id AND d.status = 'accepted' AND d.hidden_at IS NULL))
+  + LEAST(5, r.source_count)
+  + CASE WHEN s.featured_at IS NOT NULL THEN 10 ELSE 0 END)`;
+
+/** Columns for a StorySummary (toSummary). */
+export const summaryColumns = (sql: Db) => sql`
+  s.id AS story_id, s.status AS story_status, s.cell_count, s.published_at, s.last_update_at, s.featured_at,
+  r.title, COALESCE(r.summary, left(r.body, 240)) AS summary, r.image_key, r.source_count, r.categories, r.place_name,
+  r.start_year, r.start_month, r.start_day, r.end_year, r.end_month, r.end_day, r.is_ongoing, r.is_approx,
+  ${developingSql(sql)} AS developing, ${historicalSql(sql)} AS is_historical`;
+
+const likePattern = (q: string) => `%${q.replace(/[\\%_]/g, '\\$&')}%`;
+
+// ---------------------------------------------------------------------------------------------
+// The map: every published story as a point, cached briefly per instance (and by the CDN).
+
+const MAP_TTL_MS = 30_000;
+let mapCache: { at: number; data: MapPoint[] } | null = null;
+
+export function invalidateMapCache(): void {
+  mapCache = null;
 }
 
-export async function cellCounts(sql: Sql, res: number): Promise<CellCount[]> {
-  const cached = countCache.get(res);
-  if (cached && Date.now() - cached.at < COUNT_TTL_MS) return cached.data;
-  const data = await sql<CellCount[]>`
-    SELECT c.cell, count(*)::int AS count
-    FROM story_cells c JOIN stories s ON s.id = c.story_id
-    WHERE c.res = ${res} AND s.status = 'active'
-    GROUP BY c.cell`;
-  countCache.set(res, { at: Date.now(), data: [...data] });
+/**
+ * The map draws, filters (by time and category) and counts stories in the browser from this one list,
+ * so moving the timeline slider or switching layers costs no requests. A few thousand stories are a
+ * few hundred KB gzipped; beyond MAP_POINTS_MAX the oldest-updated drop out (see DESIGN.md follow-ups).
+ */
+export const MAP_POINTS_MAX = 20_000;
+
+export async function mapPoints(sql: Sql): Promise<MapPoint[]> {
+  if (mapCache && Date.now() - mapCache.at < MAP_TTL_MS) return mapCache.data;
+  const rows = await sql<{ id: string; title: string; lat: number | null; lng: number | null; cells: string[]; categories: Category[];
+    startYear: number; startMonth: number | null; startDay: number | null; endYear: number | null; endMonth: number | null; endDay: number | null;
+    isOngoing: boolean; developing: boolean }[]>`
+    SELECT s.id, r.title, r.lat, r.lng, r.cells, r.categories, r.start_year, r.start_month, r.start_day,
+           r.end_year, r.end_month, r.end_day, r.is_ongoing, ${developingSql(sql)} AS developing
+    FROM stories s JOIN story_revisions r ON r.id = s.current_revision_id
+    WHERE s.status = 'active'
+    ORDER BY s.last_update_at DESC
+    LIMIT ${MAP_POINTS_MAX}`;
+  const data: MapPoint[] = [];
+  for (const r of rows) {
+    const point = r.lat !== null && r.lng !== null ? { lat: r.lat, lng: r.lng } : cellsCenter(r.cells);
+    if (!point) continue;
+    const { start, end } = datesOf(r);
+    const { lo, hi } = eventRange({ start, end, isOngoing: r.isOngoing });
+    data.push({ id: r.id, title: r.title, lat: point.lat, lng: point.lng, categories: r.categories, lo, hi, year: r.startYear, developing: r.developing });
+  }
+  mapCache = { at: Date.now(), data };
   return data;
 }
 
 // ---------------------------------------------------------------------------------------------
-// Reading
+// Lists: one query for every list (explore, a region, a person, search), with filters and orderings.
+
+export type StoryListFilters = z.output<typeof storyListQuerySchema>;
 
 /**
- * Published stories in a cell, plus the ones waiting for approval that this viewer may see (their own,
- * or all of them for reviewers), so a newcomer finds the story they just wrote where they put it.
+ * Published stories matching the filters. In a region (`cell`) the ones waiting for approval that this
+ * viewer may see are included too (their own, or all for reviewers), so a newcomer finds the story
+ * they just wrote where they put it.
  */
-export async function listStoriesInCell(
+export async function listStories(
   { sql, storage }: StoryDeps,
-  cell: string,
-  offset: number,
+  f: StoryListFilters,
   viewer: SessionUser | null,
-  limit = 30,
+  limit: number = LIMITS.pageSize,
 ): Promise<Page<StorySummary>> {
   const reviewer = !!viewer && canReview(viewer.trustLevel);
+  const range = f.from != null || f.to != null ? yearRangeKeys(f.from, f.to) : null;
+  const q = f.q?.trim() || null;
+  const sort = f.sort === 'relevance' && !q && !f.cell ? 'significance' : f.sort;
+  const order =
+    sort === 'published' ? sql`COALESCE(s.published_at, s.created_at) DESC`
+    : sort === 'updated' ? sql`s.last_update_at DESC`
+    : sort === 'significance' ? sql`${significanceSql(sql)} DESC, ${hiKeySql(sql)} DESC`
+    : sort === 'relevance' && q ? sql`(CASE WHEN r.title ILIKE ${`${q.replace(/[\\%_]/g, '\\$&')}%`} THEN 3 WHEN r.title ILIKE ${likePattern(q)} THEN 2 ELSE 1 END) DESC, ${significanceSql(sql)} DESC`
+    // In a region, stories about that place specifically (a point or a small area) come before wide ones.
+    : sort === 'relevance' ? sql`s.cell_count ASC, ${significanceSql(sql)} DESC`
+    : sql`${hiKeySql(sql)} DESC, ${loKeySql(sql)} DESC`;
   const rows = await sql<SummaryRow[]>`
-    SELECT s.id AS story_id, s.status AS story_status, s.cell_count, r.title, r.image_key, r.source_count,
-           r.start_year, r.start_month, r.start_day, r.end_year, r.end_month, r.end_day,
-           r.is_ongoing, r.is_approx
-    FROM story_cells c
-    JOIN stories s ON s.id = c.story_id
-    JOIN story_revisions r ON r.id = s.current_revision_id
-    WHERE c.cell = ${cell}
-      AND (s.status = 'active' OR (s.status = 'unreviewed' AND (${reviewer} OR s.created_by = ${viewer?.id ?? null})))
-    ORDER BY r.is_ongoing DESC, r.sort_key DESC, s.id DESC
-    LIMIT ${limit + 1} OFFSET ${offset}`;
-  return { items: rows.slice(0, limit).map((r) => toSummary(storage, r)), nextOffset: rows.length > limit ? offset + limit : null };
+    SELECT ${summaryColumns(sql)}
+    FROM stories s JOIN story_revisions r ON r.id = s.current_revision_id
+    WHERE (s.status = 'active'
+        ${f.cell ? sql`OR (s.status = 'unreviewed' AND (${reviewer} OR s.created_by = ${viewer?.id ?? null}))` : sql``})
+      ${f.cell ? sql`AND EXISTS (SELECT 1 FROM story_cells c WHERE c.story_id = s.id AND c.cell = ${f.cell})` : sql``}
+      ${f.categories.length ? sql`AND r.categories && ${f.categories}::text[]` : sql``}
+      ${range ? sql`AND ${loKeySql(sql)} <= ${range.hi} AND ${hiKeySql(sql)} >= ${range.lo}` : sql``}
+      ${f.kind === 'historical' ? sql`AND ${historicalSql(sql)}` : f.kind === 'new' ? sql`AND NOT ${historicalSql(sql)}` : sql``}
+      ${f.ongoing ? sql`AND ${developingSql(sql)}` : sql``}
+      ${f.on ? sql`AND ((r.start_month = ${f.on[0]} AND r.start_day = ${f.on[1]}) OR (r.end_month = ${f.on[0]} AND r.end_day = ${f.on[1]}))` : sql``}
+      ${q ? sql`AND (r.title ILIKE ${likePattern(q)} OR r.summary ILIKE ${likePattern(q)} OR r.place_name ILIKE ${likePattern(q)}
+                    OR EXISTS (SELECT 1 FROM unnest(r.people) p WHERE p ILIKE ${likePattern(q)}))` : sql``}
+      ${f.person ? sql`AND EXISTS (SELECT 1 FROM unnest(r.people) p WHERE lower(p) = lower(${f.person}))` : sql``}
+    ORDER BY ${order}, s.id DESC
+    LIMIT ${limit + 1} OFFSET ${f.offset}`;
+  return { items: rows.slice(0, limit).map((r) => toSummary(storage, r)), nextOffset: rows.length > limit ? f.offset + limit : null };
 }
 
-function permissions(story: StoryRow, viewer: SessionUser | null): StoryDetail['can'] {
-  if (!viewer || viewer.bannedAt) return { edit: false, editGoesLive: false, review: false };
+/** Published stories by id, in the order asked (unknown or unpublished ids are skipped). */
+export async function storySummaries({ sql, storage }: StoryDeps, ids: string[]): Promise<StorySummary[]> {
+  if (!ids.length) return [];
+  const rows = await sql<SummaryRow[]>`
+    SELECT ${summaryColumns(sql)}
+    FROM stories s JOIN story_revisions r ON r.id = s.current_revision_id
+    WHERE s.id IN ${sql(ids)} AND s.status = 'active'`;
+  const byId = new Map(rows.map((r) => [r.storyId, toSummary(storage, r)]));
+  return ids.flatMap((id) => byId.get(id) ?? []);
+}
+
+/** A random published story; `surprise` prefers well-sourced or connected ones. Null when there are none. */
+export async function randomStory(sql: Sql, mode: 'surprise' | 'any'): Promise<string | null> {
+  const pick = async (where: ReturnType<Db>) => {
+    const [row] = await sql<{ id: string }[]>`
+      SELECT s.id FROM stories s JOIN story_revisions r ON r.id = s.current_revision_id
+      WHERE s.status = 'active' AND ${where}
+      ORDER BY random() LIMIT 1`;
+    return row?.id ?? null;
+  };
+  if (mode === 'surprise') {
+    const id = await pick(sql`(s.featured_at IS NOT NULL OR r.source_count >= ${POLICY.surpriseMinSources}
+      OR EXISTS (SELECT 1 FROM story_links l WHERE l.to_story_id = s.id OR l.from_story_id = s.id))`);
+    if (id) return id;
+  }
+  return pick(sql`true`);
+}
+
+export function permissions(story: StoryRow, viewer: SessionUser | null): StoryDetail['can'] {
+  const none = { edit: false, editGoesLive: false, review: false, addDevelopment: false, correct: false, feature: false };
+  if (!viewer || viewer.bannedAt || !viewer.termsAcceptedAt) return none;
+  const review = canReview(viewer.trustLevel);
   // A story whose first version is still held can't be edited until that version is reviewed.
-  if (!story.currentRevisionId) return { edit: false, editGoesLive: false, review: canReview(viewer.trustLevel) };
+  if (!story.currentRevisionId) return { ...none, review };
   const isCreatorOfUnreviewed =
     viewer.id === story.createdBy && story.status === 'unreviewed' && story.protectionLevel === TRUST.NEW;
   return {
-    edit: story.status !== 'hidden' || canReview(viewer.trustLevel),
+    edit: story.status !== 'hidden' || review,
     editGoesLive: viewer.trustLevel >= liveEditThreshold(story.protectionLevel) || isCreatorOfUnreviewed,
-    review: canReview(viewer.trustLevel),
+    review,
+    addDevelopment: story.status !== 'hidden',
+    correct: story.status === 'active',
+    feature: review && story.status === 'active',
   };
 }
 
-const canSeeUnaccepted = (viewer: SessionUser | null, authorId: string) =>
+export const canSeeUnaccepted = (viewer: SessionUser | null, authorId: string) =>
   !!viewer && (canReview(viewer.trustLevel) || viewer.id === authorId);
 
 /**
  * Published stories are public. A story waiting for approval (or whose first version is held) is
  * visible only to the person who started it and to reviewers; hidden stories only to reviewers.
  */
-function canSeeStory(story: StoryRow, viewer: SessionUser | null): boolean {
+export function canSeeStory(story: StoryRow, viewer: SessionUser | null): boolean {
   if (viewer && canReview(viewer.trustLevel)) return true;
   if (story.status === 'hidden') return false;
   if (story.status === 'active' && story.currentRevisionId) return true;
   return !!viewer && viewer.id === story.createdBy;
 }
 
-function assertVisible(story: StoryRow | undefined, viewer: SessionUser | null): asserts story is StoryRow {
+export function assertVisible(story: StoryRow | undefined, viewer: SessionUser | null): asserts story is StoryRow {
   if (!story || !canSeeStory(story, viewer)) throw notFound('Story');
 }
 
@@ -251,7 +392,8 @@ async function markPublished(tx: Db, storyId: string, revisionId: string): Promi
     WHERE id = ${storyId}`;
 }
 
-export async function getStory({ sql, storage }: StoryDeps, id: string, viewer: SessionUser | null): Promise<StoryDetail> {
+export async function getStory(deps: StoryDeps, id: string, viewer: SessionUser | null): Promise<StoryDetail> {
+  const { sql, storage } = deps;
   const story = await fetchStory(sql, id);
   assertVisible(story, viewer);
 
@@ -261,9 +403,18 @@ export async function getStory({ sql, storage }: StoryDeps, id: string, viewer: 
     ? await fetchRevisions(sql, sql`r.id = ${story.currentRevisionId}`)
     : await fetchRevisions(sql, sql`r.story_id = ${id} ORDER BY r.created_at LIMIT 1`);
   if (!revision || (!story.currentRevisionId && !canSeeRevision(revision, story, viewer))) throw notFound('Story');
-  const [counts] = await sql<{ pending: number; creatorName: string }[]>`
+  const reviewer = !!viewer && canReview(viewer.trustLevel);
+  const [counts] = await sql<{ pending: number; creatorName: string; openCorrections: number; developmentCount: number }[]>`
     SELECT (SELECT count(*)::int FROM story_revisions WHERE story_id = ${id} AND status = 'pending') AS pending,
-           (SELECT display_name FROM users WHERE id = ${story.createdBy}) AS creator_name`;
+           (SELECT display_name FROM users WHERE id = ${story.createdBy}) AS creator_name,
+           (SELECT count(*)::int FROM corrections WHERE story_id = ${id} AND status = 'open' AND hidden_at IS NULL) AS open_corrections,
+           (SELECT count(*)::int FROM story_developments WHERE story_id = ${id} AND status = 'accepted' AND hidden_at IS NULL) AS development_count`;
+  const developments = await listDevelopments(deps, id, viewer, 0, 5);
+  const point = revision.lat !== null && revision.lng !== null ? { lat: revision.lat, lng: revision.lng } : cellsCenter(revision.cells) ?? { lat: 0, lng: 0 };
+  const { end } = datesOf(revision);
+  const lastDate = end ?? { year: revision.startYear, month: revision.startMonth, day: revision.startDay };
+  const published = story.publishedAt ?? story.createdAt;
+  const gapDays = (published.getTime() - Date.UTC(lastDate.year, (lastDate.month ?? 12) - 1, lastDate.day ?? 28)) / 86_400_000;
 
   return {
     id: story.id,
@@ -274,8 +425,79 @@ export async function getStory({ sql, storage }: StoryDeps, id: string, viewer: 
     revision: toRevision(storage, revision),
     cellCount: story.cellCount,
     pendingCount: counts?.pending ?? 0,
+    point,
+    publishedAt: story.publishedAt?.toISOString() ?? null,
+    lastUpdateAt: story.lastUpdateAt.toISOString(),
+    featured: !!story.featuredAt,
+    isHistorical: !revision.isOngoing && gapDays > HISTORICAL_GAP_DAYS,
+    connections: await connectionsOf(deps, id, revision.links, viewer),
+    developments: developments.items,
+    developmentCount: counts?.developmentCount ?? 0,
+    openCorrections: counts?.openCorrections ?? 0,
+    collections: await collectionsContaining(sql, id, reviewer),
     can: permissions(story, viewer),
   };
+}
+
+/**
+ * Both directions of a story's links, from its own point of view: the links its current version names,
+ * then links other stories name to it (shown with the inverse relation), skipping duplicates and stories
+ * the viewer can't see.
+ */
+async function connectionsOf(
+  { sql, storage }: StoryDeps,
+  storyId: string,
+  outgoing: { storyId: string; relation: LinkRelation }[],
+  viewer: SessionUser | null,
+): Promise<StoryConnection[]> {
+  const incoming = await sql<{ fromStoryId: string; relation: LinkRelation }[]>`
+    SELECT from_story_id, relation FROM story_links WHERE to_story_id = ${storyId} LIMIT 100`;
+  const wanted: { id: string; relation: LinkRelation; direction: 'out' | 'in' }[] = [];
+  const seen = new Set<string>([storyId]);
+  for (const l of outgoing) if (!seen.has(l.storyId)) { seen.add(l.storyId); wanted.push({ id: l.storyId, relation: l.relation, direction: 'out' }); }
+  for (const l of incoming) if (!seen.has(l.fromStoryId)) { seen.add(l.fromStoryId); wanted.push({ id: l.fromStoryId, relation: INVERSE_RELATION[l.relation], direction: 'in' }); }
+  if (!wanted.length) return [];
+  const reviewer = !!viewer && canReview(viewer.trustLevel);
+  const rows = await sql<(RefRow & { status: StoryStatus; createdBy: string })[]>`
+    SELECT s.id, s.status, s.created_by, r.title, r.image_key, r.start_year, r.start_month, r.start_day,
+           r.end_year, r.end_month, r.end_day, r.is_ongoing, r.is_approx
+    FROM stories s JOIN story_revisions r ON r.id = s.current_revision_id
+    WHERE s.id IN ${sql(wanted.map((w) => w.id))}`;
+  const visible = new Map(
+    rows.filter((r) => r.status === 'active' || reviewer || (r.status === 'unreviewed' && r.createdBy === viewer?.id)).map((r) => [r.id, r]),
+  );
+  return wanted.flatMap((w) => {
+    const row = visible.get(w.id);
+    return row ? [{ relation: w.relation, direction: w.direction, story: toRef(storage, row) }] : [];
+  });
+}
+
+type RefRow = Pick<RevisionRow, 'title' | 'imageKey' | 'startYear' | 'startMonth' | 'startDay' | 'endYear' | 'endMonth' | 'endDay' | 'isOngoing' | 'isApprox'> & { id: string };
+
+function toRef(storage: Storage, r: RefRow): StoryRef {
+  return { id: r.id, title: r.title, ...datesOf(r), isOngoing: r.isOngoing, isApprox: r.isApprox, thumbUrl: imageUrls(storage, r.imageKey).thumbUrl };
+}
+
+/**
+ * Whether story `s` (current revision `r`) belongs to collection `c` by the collection's rules:
+ * inside its area, in one of its categories, overlapping its years. A collection without rules
+ * matches nothing (it only has hand-picked stories).
+ */
+export const collectionRuleSql = (sql: Db) => sql`(
+  (c.cells <> '{}' OR c.categories <> '{}' OR c.from_year IS NOT NULL OR c.to_year IS NOT NULL)
+  AND (c.cells = '{}' OR EXISTS (SELECT 1 FROM story_cells sc WHERE sc.story_id = s.id AND sc.cell = ANY(c.cells)))
+  AND (c.categories = '{}' OR r.categories && c.categories)
+  AND (c.from_year IS NULL OR ${hiKeySql(sql)} >= c.from_year * 10000 + 101)
+  AND (c.to_year IS NULL OR ${loKeySql(sql)} <= c.to_year * 10000 + 1231))`;
+
+async function collectionsContaining(sql: Sql, storyId: string, reviewer: boolean): Promise<CollectionRef[]> {
+  return sql<CollectionRef[]>`
+    SELECT c.id, c.title, c.kind
+    FROM collections c, stories s JOIN story_revisions r ON r.id = s.current_revision_id
+    WHERE s.id = ${storyId} AND (c.status = 'active' OR ${reviewer})
+      AND (EXISTS (SELECT 1 FROM collection_items i WHERE i.collection_id = c.id AND i.story_id = s.id) OR ${collectionRuleSql(sql)})
+    ORDER BY c.featured_at DESC NULLS LAST, c.title
+    LIMIT 20`;
 }
 
 export async function listRevisions(sql: Sql, storyId: string, viewer: SessionUser | null): Promise<RevisionListItem[]> {
@@ -316,40 +538,70 @@ export async function getRevision({ sql, storage }: StoryDeps, id: string, viewe
 // ---------------------------------------------------------------------------------------------
 // Writing
 
-/** Points the story at a revision and rebuilds its cell index. */
-export async function applyRevision(tx: Db, storyId: string, revision: { id: string; cells: string[] }): Promise<void> {
-  const baseCells = uncompact(revision.cells);
+/** Points the story at a revision and rebuilds its cell and link indexes. */
+export async function applyRevision(tx: Db, storyId: string, revision: { id: string }): Promise<void> {
+  const [rev] = await tx<{ cells: string[]; links: { storyId: string; relation: LinkRelation }[] }[]>`
+    SELECT cells, links FROM story_revisions WHERE id = ${revision.id}`;
+  if (!rev) throw notFound('Version');
+  const baseCells = uncompact(rev.cells);
   const rows = indexCells(baseCells).map(({ res, cell }) => ({ storyId, res, cell }));
   await tx`
-    UPDATE stories SET current_revision_id = ${revision.id}, cell_count = ${baseCells.length}, updated_at = now()
+    UPDATE stories SET current_revision_id = ${revision.id}, cell_count = ${baseCells.length}, updated_at = now(), last_update_at = now()
     WHERE id = ${storyId}`;
   await tx`DELETE FROM story_cells WHERE story_id = ${storyId}`;
   for (let i = 0; i < rows.length; i += 5_000) {
     const chunk = rows.slice(i, i + 5_000).map((r) => [r.storyId, r.res, r.cell]);
     await tx`INSERT INTO story_cells (story_id, res, cell) VALUES ${tx(chunk)}`;
   }
-  invalidateCellCounts();
+  await tx`DELETE FROM story_links WHERE from_story_id = ${storyId}`;
+  const links = rev.links.filter((l) => l.storyId !== storyId);
+  if (links.length) {
+    await tx`
+      INSERT INTO story_links (from_story_id, to_story_id, relation)
+      SELECT ${storyId}, s.id, l.relation
+      FROM jsonb_to_recordset(${tx.json(links)}) AS l("storyId" uuid, relation text) JOIN stories s ON s.id = l."storyId"
+      ON CONFLICT DO NOTHING`;
+  }
+  invalidateMapCache();
 }
 
-async function prepareContent(storage: Storage, input: CreateStoryInput) {
+async function prepareContent({ sql, storage }: StoryDeps, user: SessionUser, input: StoryInput, storyId: string | null) {
   // Count before expanding: a few thousand coarse cells would otherwise expand to millions.
   if (baseCellCount(input.cells) > LIMITS.cellsMax) {
     throw badRequest('That area is too large. Select fewer or smaller regions.', 'area-too-large');
   }
-  const baseCells = toBaseCells([...new Set(input.cells)]);
+  // Without a wider area, the story is indexed at the hexagon its point falls in.
+  const baseCells = input.cells.length
+    ? toBaseCells([...new Set(input.cells)])
+    : [cellAt(input.location.lat, input.location.lng, BASE_RES)];
   for (const key of new Set(docImageKeys(input.content))) {
     if (!(await storage.exists(imageFileNames(key).full))) {
       throw badRequest('One of the images was not found. Please upload it again.');
     }
   }
+  if (input.links.some((l) => l.storyId === storyId)) throw badRequest("A story can't be connected to itself.", 'bad-link');
+  if (input.links.length) {
+    // Connections may point at published stories, or at your own (e.g. one waiting for approval).
+    const found = await sql<{ id: string }[]>`
+      SELECT id FROM stories WHERE id IN ${sql(input.links.map((l) => l.storyId))}
+        AND (status = 'active' OR (status = 'unreviewed' AND created_by = ${user.id}))`;
+    if (found.length !== input.links.length) throw badRequest('One of the connected stories was not found.', 'bad-link');
+  }
   const firstImage = input.content.find((b) => b.type === 'image');
   return {
     title: input.title,
+    summary: input.summary,
     body: docToPlainText(input.content),
     content: input.content,
     // The first image doubles as the story's thumbnail in lists.
     image_key: firstImage?.key ?? null,
     image_credit: firstImage?.caption ?? null,
+    categories: input.categories,
+    lat: input.location.lat,
+    lng: input.location.lng,
+    place_name: input.location.placeName ?? null,
+    people: input.people,
+    links: input.links.map((l) => ({ storyId: l.storyId, relation: l.relation })),
     cells: compact(baseCells).sort(),
     start_year: input.start.year,
     start_month: input.start.month ?? null,
@@ -368,9 +620,10 @@ async function insertRevision(
   tx: Db,
   fields: Content & { story_id: string; parent_revision_id: string | null; author_id: string; status: RevisionStatus; edit_summary: string | null; flags: string[]; origin: 'create' | 'edit' },
 ): Promise<string> {
-  // postgres.js serialises the sources array for the jsonb column itself.
+  // jsonb columns go through tx.json so arrays aren't sent as Postgres arrays.
+  const values = { ...fields, sources: tx.json(fields.sources), links: tx.json(fields.links) };
   const [row] = await tx<{ id: string }[]>`
-    INSERT INTO story_revisions ${tx(fields as Record<string, unknown>)}
+    INSERT INTO story_revisions ${tx(values as unknown as Record<string, unknown>)}
     RETURNING id`;
   return row!.id;
 }
@@ -379,21 +632,25 @@ async function insertRevision(
  * Must run inside the transaction that inserts. The per-user advisory lock serialises concurrent
  * writes from one user so parallel requests can't all pass the count.
  */
-async function assertWithinDailyLimit(sql: Db, user: SessionUser, kind: 'stories' | 'edits'): Promise<void> {
+export async function assertWithinDailyLimit(sql: Db, user: SessionUser, kind: 'stories' | 'edits'): Promise<void> {
   await sql`SELECT pg_advisory_xact_lock(hashtext(${user.id}))`;
   const limit = kind === 'stories' ? POLICY.storiesPerDay[user.trustLevel] : POLICY.editsPerDay[user.trustLevel];
   const [row] =
     kind === 'stories'
       ? await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM stories WHERE created_by = ${user.id} AND created_at > now() - interval '1 day'`
       // Only edits: a story's first version counts as a new story, and restore/rollback copies aren't edits.
-      : await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM story_revisions WHERE author_id = ${user.id} AND origin = 'edit' AND created_at > now() - interval '1 day'`;
+      // Timeline developments count as edits.
+      : await sql<{ n: number }[]>`
+          SELECT (SELECT count(*)::int FROM story_revisions WHERE author_id = ${user.id} AND origin = 'edit' AND created_at > now() - interval '1 day')
+               + (SELECT count(*)::int FROM story_developments WHERE author_id = ${user.id} AND created_at > now() - interval '1 day') AS n`;
   if ((row?.n ?? 0) >= limit) {
     throw tooMany(`You've reached today's limit of ${limit} ${kind === 'stories' ? 'new stories' : 'edits'}. It grows as you contribute.`);
   }
 }
 
-export async function createStory({ sql, storage }: StoryDeps, user: SessionUser, input: CreateStoryInput): Promise<WriteResult> {
-  const content = await prepareContent(storage, input);
+export async function createStory(deps: StoryDeps, user: SessionUser, input: StoryInput): Promise<WriteResult> {
+  const { sql } = deps;
+  const content = await prepareContent(deps, user, input, null);
   const flags = detectFlags({ previousBody: null, body: content.body, links: docLinkCount(content.content), trustLevel: user.trustLevel });
   const held = flags.length > 0 && !canReview(user.trustLevel);
 
@@ -417,7 +674,7 @@ export async function createStory({ sql, storage }: StoryDeps, user: SessionUser
       flags,
       origin: 'create',
     });
-    if (!held) await applyRevision(tx, storyId, { id: revisionId, cells: content.cells });
+    if (!held) await applyRevision(tx, storyId, { id: revisionId });
     if (!held && storyStatus === 'active') await markPublished(tx, storyId, revisionId);
     return { storyId, revisionId, status: held ? 'pending' : 'live', storyStatus } as const;
   });
@@ -426,18 +683,21 @@ export async function createStory({ sql, storage }: StoryDeps, user: SessionUser
 }
 
 const sameContent = (a: Content, b: RevisionRow) =>
-  JSON.stringify([a.title, a.content, a.cells, a.start_year, a.start_month, a.start_day,
-    a.end_year, a.end_month, a.end_day, a.is_ongoing, a.is_approx, a.sources]) ===
-  JSON.stringify([b.title, b.content ?? legacyDoc(b.body, b.imageKey, b.imageCredit), [...b.cells].sort(), b.startYear, b.startMonth, b.startDay,
-    b.endYear, b.endMonth, b.endDay, b.isOngoing, b.isApprox, b.sources.map((s) => ({ title: s.title, url: s.url ?? null }))]);
+  JSON.stringify([a.title, a.summary, a.content, a.categories, a.lat, a.lng, a.place_name, a.people, a.links, a.cells,
+    a.start_year, a.start_month, a.start_day, a.end_year, a.end_month, a.end_day, a.is_ongoing, a.is_approx, a.sources]) ===
+  JSON.stringify([b.title, b.summary, b.content ?? legacyDoc(b.body, b.imageKey, b.imageCredit), b.categories, b.lat, b.lng, b.placeName,
+    b.people, b.links.map((l) => ({ storyId: l.storyId, relation: l.relation })), [...b.cells].sort(),
+    b.startYear, b.startMonth, b.startDay, b.endYear, b.endMonth, b.endDay, b.isOngoing, b.isApprox,
+    b.sources.map((s) => ({ title: s.title, url: s.url ?? null }))]);
 
 export async function editStory(
-  { sql, storage }: StoryDeps,
+  deps: StoryDeps,
   user: SessionUser,
   storyId: string,
-  input: EditStoryInput,
+  input: EditStoryData,
 ): Promise<WriteResult> {
-  const content = await prepareContent(storage, input);
+  const { sql } = deps;
+  const content = await prepareContent(deps, user, input, storyId);
 
   const result = await sql.begin(async (tx) => {
     await assertWithinDailyLimit(tx, user, 'edits');
@@ -471,7 +731,7 @@ export async function editStory(
       flags,
       origin: 'edit',
     });
-    if (live) await applyRevision(tx, storyId, { id: revisionId, cells: content.cells });
+    if (live) await applyRevision(tx, storyId, { id: revisionId });
     return { storyId, revisionId, status: live ? 'live' : 'pending', storyStatus: story.status } as const;
   });
   if (result.status === 'live') await refreshTrust(sql, user.id);
@@ -520,7 +780,7 @@ export async function reviewRevision(
     await logModAction(tx, user.id, decision, 'revision', revisionId, reason);
     return rev.authorId;
   });
-  invalidateCellCounts();
+  invalidateMapCache();
   await refreshTrust(sql, authorId);
 }
 
@@ -537,12 +797,14 @@ export async function copyToNewRevision(
   summary: string,
   origin: 'restore' | 'rollback',
 ): Promise<string> {
-  const [row] = await tx<{ id: string; cells: string[] }[]>`
+  const [row] = await tx<{ id: string }[]>`
     INSERT INTO story_revisions (story_id, parent_revision_id, author_id, title, body, content, image_key, image_credit, cells,
       start_year, start_month, start_day, end_year, end_month, end_day, is_ongoing, is_approx, sources,
+      summary, categories, lat, lng, place_name, people, links,
       status, edit_summary, reviewed_by, reviewed_at, origin)
     SELECT story_id, ${story.currentRevisionId}, ${actorId}, title, body, content, image_key, image_credit, cells,
       start_year, start_month, start_day, end_year, end_month, end_day, is_ongoing, is_approx, sources,
+      summary, categories, lat, lng, place_name, people, links,
       'accepted', ${summary}, ${actorId}, now(), ${origin}
     FROM story_revisions WHERE id = ${sourceId} AND story_id = ${story.id}
     RETURNING id, cells`;
@@ -645,7 +907,7 @@ export async function setStoryStatus(
     await logModAction(tx, user.id, 'approve', 'story', storyId, reason);
     return { status: 'active' as StoryStatus, approvedCreator: story.createdBy };
   });
-  invalidateCellCounts();
+  invalidateMapCache();
   // Contributions only count toward promotion once the story is published.
   if (result.approvedCreator) await refreshTrust(sql, result.approvedCreator);
   return result.status;
@@ -685,7 +947,12 @@ export async function setRevisionRemoved(sql: Sql, user: SessionUser, revisionId
 }
 
 /** Marks open reports about these items as handled (the item was dealt with). Returns how many. */
-export async function closeReportsAbout(tx: Db, actorId: string, targetType: 'story' | 'revision' | 'comment' | 'user', ids: string[]): Promise<number> {
+export async function closeReportsAbout(
+  tx: Db,
+  actorId: string,
+  targetType: 'story' | 'revision' | 'user' | 'development' | 'correction' | 'collection',
+  ids: string[],
+): Promise<number> {
   if (!ids.length) return 0;
   const rows = await tx`
     UPDATE reports SET resolved_by = ${actorId}, resolved_at = now(), resolution = 'actioned'
@@ -720,32 +987,58 @@ export async function pendingForReview({ sql, storage }: StoryDeps) {
   }));
 }
 
-type SummaryRow = Pick<RevisionRow, 'title' | 'imageKey' | 'startYear' | 'startMonth' | 'startDay' | 'endYear' | 'endMonth' | 'endDay' | 'isOngoing' | 'isApprox'> & {
+export type SummaryRow = Pick<RevisionRow, 'title' | 'imageKey' | 'startYear' | 'startMonth' | 'startDay' | 'endYear' | 'endMonth' | 'endDay' | 'isOngoing' | 'isApprox' | 'categories' | 'placeName'> & {
   storyId: string;
   storyStatus: StoryStatus;
   cellCount: number;
   sourceCount: number;
+  summary: string;
+  publishedAt: Date | null;
+  lastUpdateAt: Date;
+  featuredAt: Date | null;
+  developing: boolean;
+  isHistorical: boolean;
 };
 
-function toSummary(storage: Storage, r: SummaryRow): StorySummary {
+export function toSummary(storage: Storage, r: SummaryRow): StorySummary {
   return {
     id: r.storyId,
     title: r.title,
+    summary: r.summary,
     thumbUrl: imageUrls(storage, r.imageKey).thumbUrl,
     ...datesOf(r),
     isOngoing: r.isOngoing,
     isApprox: r.isApprox,
+    categories: r.categories,
+    placeName: r.placeName,
     sourceCount: r.sourceCount,
     cellCount: r.cellCount,
     status: r.storyStatus,
+    publishedAt: r.publishedAt?.toISOString() ?? null,
+    lastUpdateAt: r.lastUpdateAt.toISOString(),
+    isHistorical: r.isHistorical,
+    developing: r.developing,
+    featured: !!r.featuredAt,
   };
+}
+
+/** Reviewers feature a published story on the home page, or take it off. */
+export async function setFeatured(sql: Sql, user: SessionUser, storyId: string, featured: boolean, reason: string | null): Promise<void> {
+  if (!canReview(user.trustLevel)) throw forbidden();
+  await sql.begin(async (tx) => {
+    const story = await fetchStory(tx, storyId, true);
+    if (!story) throw notFound('Story');
+    if (featured && story.status !== 'active') throw conflict('Only published stories can be featured.');
+    if (featured === !!story.featuredAt) return;
+    await tx`UPDATE stories SET featured_at = ${featured ? sql`now()` : null} WHERE id = ${storyId}`;
+    await logModAction(tx, user.id, featured ? 'feature' : 'unfeature', 'story', storyId, reason);
+  });
 }
 
 /** Newcomers' stories waiting for a reviewer to approve them, oldest first. */
 export async function unreviewedStories({ sql, storage }: StoryDeps): Promise<UnreviewedStory[]> {
   const rows = await sql<(SummaryRow & { revisionId: string; authorId: string; authorName: string; excerpt: string; createdAt: Date })[]>`
-    SELECT s.id AS story_id, s.status AS story_status, s.cell_count, s.created_at, r.id AS revision_id, r.title, r.image_key, r.source_count,
-           r.start_year, r.start_month, r.start_day, r.end_year, r.end_month, r.end_day, r.is_ongoing, r.is_approx,
+    SELECT ${summaryColumns(sql)}, s.created_at, r.id AS revision_id,
            left(r.body, 280) AS excerpt, u.id AS author_id, u.display_name AS author_name
     FROM stories s
     JOIN story_revisions r ON r.id = s.current_revision_id
@@ -777,10 +1070,8 @@ export async function storiesStartedBy(
   limit = 30,
 ): Promise<Page<ContributionStory>> {
   const rows = await sql<(SummaryRow & { createdAt: Date; hasCurrent: boolean; revisionStatus: RevisionStatus; published: boolean })[]>`
-    SELECT s.id AS story_id, s.status AS story_status, s.cell_count, s.created_at, s.current_revision_id IS NOT NULL AS has_current,
-           s.published_at IS NOT NULL AS published,
-           r.status AS revision_status, r.title, r.image_key, r.source_count,
-           r.start_year, r.start_month, r.start_day, r.end_year, r.end_month, r.end_day, r.is_ongoing, r.is_approx
+    SELECT ${summaryColumns(sql)}, s.created_at, s.current_revision_id IS NOT NULL AS has_current,
+           s.published_at IS NOT NULL AS published, r.status AS revision_status
     FROM stories s
     JOIN story_revisions r ON r.id = CASE
       WHEN s.current_revision_id IS NOT NULL AND (s.status <> 'hidden' OR ${viewerIsReviewer}) THEN s.current_revision_id

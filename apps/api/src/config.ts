@@ -33,7 +33,10 @@ const schema = z
     R2_ACCESS_KEY_ID: optional,
     R2_SECRET_ACCESS_KEY: optional,
     R2_PUBLIC_BASE_URL: unsetIfEmpty(z.url()),
-    /** Shared state for multiple instances (chat fan-out, presence, rate limits). Optional locally. */
+    /**
+     * Shared state for multiple instances (rate limits, cooldowns, small caches). Optional: without it
+     * each instance keeps its own, which is fine for a small site.
+     */
     REDIS_URL: unsetIfEmpty(z.string().regex(/^rediss?:\/\//, 'must start with redis:// or rediss://')),
     /** Trust X-Forwarded-For for the client IP. Only behind a proxy that overwrites it (Vercel does). */
     TRUST_PROXY: z
@@ -85,7 +88,6 @@ const schema = z
       }
     }
     if (c.VERCEL === '1') {
-      require('REDIS_URL', 'on Vercel: instances share chat, presence and rate limits through it');
       if (c.STORAGE_BACKEND !== 'r2') {
         ctx.addIssue({ code: 'custom', path: ['STORAGE_BACKEND'], message: 'must be r2 on Vercel: function disk is not durable' });
       }
