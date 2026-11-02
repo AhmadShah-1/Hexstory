@@ -580,7 +580,8 @@ switcher never make requests. Up to `MAP_POINTS_MAX` (20,000) stories, most rece
   Range, a slider on a non-linear year scale (3000 BCE → 1 BCE → 1500 → 1900 → today, so recent centuries get
   most of the width), exact year boxes (negative = BCE), a label ("The 1960s", "1914–1918") and how many events
   match; "Categories & layers" opens the category filter, the layer choice (Events, Density, Category,
-  Historical period, Developing, each with a one-line description) and the legend. The density legend says it
+  Historical period, Developing, each with a one-line description; **Category** by default, and the
+  browser remembers a change) and the legend. The density legend says it
   shows where people have written so far, not how important a place is. Everything is filtered in the browser
   (`lib/discover.ts`), so dragging costs no requests; the map filters also apply to region lists and Explore.
   On phones a "Filters · …" pill opens all of this as a bottom sheet with "Show N events".
@@ -839,10 +840,16 @@ Designed so features can be added without touching unrelated code:
 - **Backups:** on Neon, point-in-time restore within the plan's history window plus a periodic `pg_dump -Fc`
   of `DATABASE_URL_UNPOOLED` kept elsewhere; R2 objects are durable but not versioned (DEPLOYMENT.md §2). On a
   single server: nightly `pg_dump -Fc` and a copy of `UPLOAD_DIR`, both off the server. Test a restore.
-- **Before launch:** fill the remaining placeholders in `legal/*.md` (`[JURISDICTION]` in the Terms; decide whether to
+- **Before launch:** the Terms are governed by New Jersey law (courts in Hudson County or the District of
+  New Jersey; operated from Jersey City). Remaining: decide whether to
   delete the retired chat's dormant messages, which the Privacy Policy now describes as kept only as moderation
   records; the date and the contact address hexstory.world@gmail.com are
-  filled in, and the "Last updated" dates must change whenever the text does); have a lawyer review; register a DMCA agent if operating in the US; publish the
+  filled in, and the "Last updated" dates must change whenever the text does); have a lawyer review; the DMCA designated agent is registered (DMCA-1084967, 2 November
+  2026); Terms section 10 gives its name and email and points to the Copyright Office directory for the
+  rest. The postal address and phone are deliberately left off the site (they are the operator's home);
+  § 512(c)(2) expects them on the site, so add them once there is a non-home mailing address (and amend
+  the registration to match); **renew it every 3 years** at dmca.copyright.gov (by November 2029)
+  or the safe harbour lapses, and update the Terms and the registration together if the address changes; publish the
   Privacy/Terms URLs on the Google OAuth consent screen.
 
 ## 13. Known limitations / follow-ups
@@ -874,6 +881,10 @@ Designed so features can be added without touching unrelated code:
 
 ## Changelog
 
+- **2026-11-02**: Terms of Service and Privacy Policy updated: governed by New Jersey law (operated from
+  Jersey City); imported stories (Hexstory Archive, third-party photo licences); voluntary contributions;
+  DMCA designated agent (DMCA-1084967) and counter-notices; hosting providers and US data location; people named in stories. The map's
+  default layer is now Category (was Events).
 - **2026-11-02**: Import place check (`import/checks.ts`) now uses OpenStreetMap's Nominatim (1 request a
   second) instead of Photon, also checks developments' locations, compares against the place's bounding box
   (10 km margin) rather than a flat 100 km, and reports failed lookups instead of passing silently (Photon

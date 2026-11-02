@@ -25,7 +25,7 @@ export const PERIOD_COLORS: Record<PeriodId, string> = {
   c21: '#3b0764',
 };
 
-/** Neutral dot colour for the default "events" layer. */
+/** Neutral dot colour for the "events" layer (and stories without a category). */
 export const EVENT_COLOR = '#44403c';
 /** Ongoing or recently developing events. */
 export const DEVELOPING_COLOR = '#c2410c';

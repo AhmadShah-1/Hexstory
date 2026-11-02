@@ -1,9 +1,9 @@
 # Terms of Service
 
-_Last updated: 1 November 2026_
+_Last updated: 2 November 2026_
 
-Welcome to Hexstory ("the Service", "we", "us"). By creating an account or using the Service
-you agree to these Terms. If you do not agree, do not use the Service.
+Welcome to Hexstory ("the Service", "we", "us"), operated from Jersey City, New Jersey, United
+States. By creating an account or using the Service you agree to these Terms. If you do not agree, do not use the Service.
 
 ## 1. What this Service is
 
@@ -11,15 +11,20 @@ Hexstory is a community space where people share accounts, perspectives and opin
 events that happened around the world, and talk about them with each other. Its purpose is to
 encourage human interaction, discussion and involvement with history and current events.
 
-**The Service is not an encyclopedia, news outlet or authoritative source.** All stories,
-comments and images are written and uploaded by users. They reflect the views of the people who
-wrote them, not the views of Hexstory.
+**The Service is not an encyclopedia, news outlet or authoritative source.** Stories, timeline
+developments, corrections and images are written and uploaded by users, and reflect the views of
+the people who wrote them, not the views of Hexstory. Some stories were added by us in bulk to
+give the map a starting point (see section 2).
 
 ## 2. Content is not verified
 
-- Every article must list at least one source. **We do not check whether sources are real,
-  accurate, or support what the article says.** A source count is shown so readers can make
+- Every article must list at least one source. **We do not check whether the sources users add
+  are real, accurate, or support what the article says.** A source count is shown so readers can make
   their own judgment; it is not a measure of truth.
+- Some stories were added in bulk by the **Hexstory Archive** account and are labelled "Imported
+  from public sources". They summarise the encyclopedias, news organisations and official bodies
+  listed on each story as of the date they were added, and are not kept up to date automatically.
+  Like any other story they may contain mistakes, and anyone can propose corrections or edit them.
 - Stories may be incomplete, biased, outdated, disputed or wrong.
 - Do not rely on the Service for safety, legal, medical, financial, travel or any other
   decisions. Always check primary sources yourself.
@@ -55,6 +60,11 @@ Images you upload must be either your own work, which you license under CC BY-SA
 material under a compatible license (or in the public domain) that you identify when uploading.
 Do not upload images you do not have the right to share.
 
+Text of imported stories is also licensed under CC BY-SA 4.0. Their photos come from Wikimedia
+Commons or similar sources and stay under their own free licences; the author and licence of each
+are shown in its caption, with a link to its source page. Facts are not owned by anyone; the
+sources listed on a story are cited, not copied, and remain their publishers' property.
+
 ## 6. Rules of conduct
 
 Opinions and disagreement are welcome. The following are not:
@@ -85,22 +95,47 @@ Corrections you propose, the evidence you give and the decision reviewers make o
 and stay with the story's history whatever the outcome. Collections you start are public and may
 be changed by reviewers. Propose corrections in good faith, with real sources.
 
-## 9. Copyright complaints
+## 9. Voluntary contributions
 
-If you believe content on the Service infringes your copyright, send a notice to
-hexstory.world@gmail.com including: the content's URL, the work you claim is infringed, your contact
+The Service is free. You may choose to send a voluntary contribution through Stripe or PayPal from
+the Support page. Contributions are gifts towards running costs: they buy nothing, give no
+features, access or influence over content or moderation, and are not charitable donations or
+tax-deductible. Payments are handled entirely by Stripe or PayPal under their own terms. If you
+contributed by mistake, contact us.
+
+## 10. Copyright complaints
+
+Our designated agent for notices of claimed copyright infringement under the US Digital Millennium
+Copyright Act (17 U.S.C. § 512) is **Copyright Compliance, Hexstory**, at
+hexstory.world@gmail.com. Its full contact details are listed in the US Copyright Office's DMCA
+Designated Agent Directory (dmca.copyright.gov, registration DMCA-1084967).
+
+If you believe content on the Service infringes your copyright, send a notice to our designated
+agent, preferably by email, including: the content's URL, the work you claim is infringed, your contact
 details, a statement that you believe in good faith the use is not authorized, and a statement
 under penalty of perjury that your notice is accurate and you are the owner or authorized to act
-for them. We will remove infringing content and may terminate repeat infringers.
+for them, together with your physical or electronic signature. We will remove or disable access
+to the content and notify the person who posted it.
 
-## 10. Disclaimer of warranties
+If your content was removed and you believe that was a mistake or that you have the right to use
+it, you may send a counter-notice to our designated agent with: the content's former URL, your name,
+address and phone number, a statement under penalty of perjury that you believe in good faith it
+was removed by mistake or misidentification, your consent to the jurisdiction of the federal
+court for your address (or, if you are outside the United States, the United States District
+Court for the District of New Jersey), and your signature. Unless the complainant tells us they
+have started a court action, we may restore the content 10 to 14 business days after receiving
+the counter-notice.
+
+We terminate the accounts of repeat infringers in appropriate circumstances.
+
+## 11. Disclaimer of warranties
 
 THE SERVICE AND ALL CONTENT ARE PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTIES OF ANY
 KIND, EXPRESS OR IMPLIED, INCLUDING ACCURACY, COMPLETENESS, RELIABILITY, MERCHANTABILITY, FITNESS
 FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. WE DO NOT WARRANT THAT THE SERVICE WILL BE
 UNINTERRUPTED, SECURE OR FREE OF ERRORS, OR THAT CONTENT WILL BE PRESERVED.
 
-## 11. Limitation of liability
+## 12. Limitation of liability
 
 TO THE MAXIMUM EXTENT PERMITTED BY LAW, Hexstory AND ITS OPERATORS, MODERATORS AND
 CONTRIBUTORS ARE NOT LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL OR PUNITIVE
@@ -111,28 +146,31 @@ USER CONTENT. OUR TOTAL LIABILITY FOR ANY CLAIM IS LIMITED TO USD $50.
 Some jurisdictions do not allow certain limitations; in those places our liability is limited
 to the smallest extent permitted.
 
-## 12. Indemnification
+## 13. Indemnification
 
 You agree to defend and hold harmless Hexstory and its operators from claims, damages and
 costs (including reasonable legal fees) arising from your content or your breach of these Terms.
 
-## 13. Termination
+## 14. Termination
 
 You may stop using the Service and delete your account at any time. Deleting your account
 removes your profile and anonymizes your name on past contributions; text already licensed under
 CC BY-SA 4.0 remains in the Service. We may suspend or terminate accounts that break these Terms.
 
-## 14. Changes
+## 15. Changes
 
 We may update these Terms. Material changes will be announced on the Service at least 14 days
 before they take effect. Continuing to use the Service after that means you accept the new Terms.
 
-## 15. Governing law
+## 16. Governing law
 
-These Terms are governed by the laws of [JURISDICTION], without regard to conflict-of-law rules.
-Disputes will be resolved in the courts of [JURISDICTION], unless the law of your country of
-residence gives you the right to bring claims locally.
+These Terms are governed by the laws of the State of New Jersey, United States, and applicable
+United States federal law, without regard to conflict-of-law rules. Disputes will be resolved
+exclusively in the state courts of New Jersey sitting in Hudson County or the United States
+District Court for the District of New Jersey, and you consent to their jurisdiction. If you use
+the Service as a consumer and the law of your country or state of residence gives you the right to
+bring claims in your local courts or under your local law, nothing in these Terms takes that away.
 
-## 16. Contact
+## 17. Contact
 
 hexstory.world@gmail.com

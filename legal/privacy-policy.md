@@ -1,8 +1,10 @@
 # Privacy Policy
 
-_Last updated: 1 November 2026_
+_Last updated: 2 November 2026_
 
-This policy explains what Hexstory collects and how it is used.
+This policy explains what Hexstory collects and how it is used. Hexstory is operated from Jersey
+City, New Jersey, United States, and is responsible for the personal data described here. Contact:
+hexstory.world@gmail.com.
 
 ## What we collect
 
@@ -40,15 +42,31 @@ Some things are not public:
 
 Your email address is never shown publicly.
 
+## People named in stories
+
+Stories are about public events and may name public figures. Stories imported from public sources by
+the Hexstory Archive account are written to name only public figures central to an event, not
+private individuals.
+If a story names you, or says something about you that you believe is wrong, use the Report button
+or contact us and we will review it.
+
 ## Who we share data with
 
-- Infrastructure providers that host the Service (servers, storage), only to run it
+- Infrastructure providers that host the Service, only to run it: Vercel (servers), Neon (database),
+  Cloudflare R2 (image storage and delivery) and, where used, Redis Cloud (rate limits and short-lived
+  caches)
 - Google, for sign-in
 - Komoot's Photon service (OpenStreetMap data), to look up places you type into the map's search box: it
   receives the search text from our server, never your IP address or account
 - Stripe and PayPal, only if you choose to make a voluntary contribution from the Support page: you pay on
   their own pages, under their privacy policies, and we don't receive or store your payment details
 - Authorities, when required by law or to protect someone's safety
+
+## Where your data is stored
+
+Our servers and database are in the United States (Virginia), and images are delivered through
+Cloudflare's global network. If you use the Service from outside the United States, your data is
+transferred to and processed in the United States.
 
 ## Retention
 
@@ -62,8 +80,10 @@ Your email address is never shown publicly.
 
 ## Your rights
 
-Depending on where you live (for example under GDPR or CCPA) you can request access to, correction
-of, export of, or deletion of your personal data, and object to processing. Contact
+Depending on where you live (for example under the GDPR in the EU and UK, or US state privacy laws
+such as California's) you can request access to, correction of, export of, or deletion of your
+personal data, and object to processing. We don't sell personal data or share it for targeted
+advertising. Contact
 hexstory.world@gmail.com. You can delete your account at any time from your account settings.
 
 ## Children

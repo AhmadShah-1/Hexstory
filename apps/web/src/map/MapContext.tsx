@@ -204,9 +204,9 @@ const LAYER_KEY = 'hexstory:map-layer';
 function readLayer(): MapLayer {
   try {
     const saved = localStorage.getItem(LAYER_KEY);
-    return (MAP_LAYERS as readonly string[]).includes(saved ?? '') ? (saved as MapLayer) : 'events';
+    return (MAP_LAYERS as readonly string[]).includes(saved ?? '') ? (saved as MapLayer) : 'category';
   } catch {
-    return 'events';
+    return 'category';
   }
 }
 
