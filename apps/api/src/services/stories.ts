@@ -442,7 +442,8 @@ export async function getStory(deps: StoryDeps, id: string, viewer: SessionUser 
     publishedAt: story.publishedAt?.toISOString() ?? null,
     lastUpdateAt: story.lastUpdateAt.toISOString(),
     featured: !!story.featuredAt,
-    imported: !!story.importBatch,
+    // Only while the imported text stands: once someone else edits it, it is no longer what was imported.
+    imported: !!story.importBatch && revision.authorId === story.createdBy,
     isHistorical: !revision.isOngoing && gapDays > HISTORICAL_GAP_DAYS,
     connections: await connectionsOf(deps, id, revision.links, viewer),
     developments: developments.items,
@@ -501,8 +502,8 @@ export const collectionRuleSql = (sql: Db) => sql`(
   (c.cells <> '{}' OR c.categories <> '{}' OR c.from_year IS NOT NULL OR c.to_year IS NOT NULL)
   AND (c.cells = '{}' OR EXISTS (SELECT 1 FROM story_cells sc WHERE sc.story_id = s.id AND sc.cell = ANY(c.cells)))
   AND (c.categories = '{}' OR r.categories && c.categories)
-  AND (c.from_year IS NULL OR ${hiKeySql(sql)} >= c.from_year * 10000 + 101)
-  AND (c.to_year IS NULL OR ${loKeySql(sql)} <= c.to_year * 10000 + 1231))`;
+  AND (c.from_year IS NULL OR ${hiKeySql(sql)} >= c.from_year::bigint * 10000 + 101)
+  AND (c.to_year IS NULL OR ${loKeySql(sql)} <= c.to_year::bigint * 10000 + 1231))`;
 
 async function collectionsContaining(sql: Sql, storyId: string, reviewer: boolean): Promise<CollectionRef[]> {
   return sql<CollectionRef[]>`

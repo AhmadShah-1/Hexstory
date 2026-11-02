@@ -192,6 +192,13 @@ const ACTION_FILTERS: [string, string][] = [
   ['unhide', 'Unhidden'],
   ['remove-version', 'Removed versions'],
   ['protect', 'Protection'],
+  ['feature', 'Featured'],
+  ['unfeature', 'Unfeatured'],
+  ['development', 'Timeline decisions'],
+  ['remove-development', 'Removed developments'],
+  ['correction', 'Correction decisions'],
+  ['remove-correction', 'Removed corrections'],
+  ['edit-collection', 'Collection edits'],
   ['report', 'Reports'],
   ['ban-request', 'Ban requests'],
   ['ban', 'Bans'],
@@ -212,8 +219,23 @@ function describeAction(e: AuditEntry): string {
     case 'accept': return 'accepted an edit';
     case 'reject': return 'rejected an edit';
     case 'approve': return 'approved and published a story';
-    case 'hide': return e.targetType === 'comment' ? 'hid a chat message' : 'hid a story';
-    case 'unhide': return e.details?.to === 'unreviewed' ? 'returned a hidden story to the review queue' : 'brought back a hidden story';
+    case 'hide': return e.targetType === 'comment' ? 'hid a chat message' : e.targetType === 'collection' ? 'hid a collection' : 'hid a story';
+    case 'unhide':
+      if (e.targetType === 'collection') return 'brought back a hidden collection';
+      return e.details?.to === 'unreviewed' ? 'returned a hidden story to the review queue' : 'brought back a hidden story';
+    case 'feature': return e.targetType === 'collection' ? 'featured a collection' : 'featured a story';
+    case 'unfeature': return e.targetType === 'collection' ? 'stopped featuring a collection' : 'stopped featuring a story';
+    case 'edit-collection': return 'edited a collection';
+    case 'development':
+      if (arg === 'accept' || arg === 'accepted') return 'accepted a timeline development';
+      if (arg === 'reject' || arg === 'rejected') return 'rejected a timeline development';
+      break;
+    case 'remove-development': return 'removed a timeline development';
+    case 'correction':
+      if (arg === 'accepted') return 'accepted a correction';
+      if (arg === 'rejected') return 'did not accept a correction';
+      break;
+    case 'remove-correction': return 'removed a correction';
     case 'restore': return 'restored an earlier version';
     case 'rollback': return 'rolled back a story';
     case 'remove-version': return 'removed a version from the history';
@@ -258,6 +280,9 @@ function targetLink(e: AuditEntry): string | null {
     case 'revision': return `/v/${e.targetId}`;
     case 'user': return `/u/${e.target.userId ?? e.targetId}`;
     case 'comment': return e.target.cell ? `/h/${e.target.cell}?tab=square` : null;
+    case 'collection': return `/c/${e.targetId}`;
+    case 'development':
+    case 'correction': return e.target.storyId ? `/s/${e.target.storyId}` : null;
     default: return null;
   }
 }
@@ -270,7 +295,7 @@ function LogTab() {
   const filters: AuditFilters = {
     action: params.get('action') || undefined,
     actorId: params.get('actorId') || undefined,
-    targetType: targetType && ['story', 'revision', 'comment', 'user', 'report'].includes(targetType)
+    targetType: targetType && ['story', 'revision', 'comment', 'user', 'report', 'development', 'correction', 'collection'].includes(targetType)
       ? (targetType as AuditFilters['targetType'])
       : undefined,
     targetId: params.get('targetId') || undefined,

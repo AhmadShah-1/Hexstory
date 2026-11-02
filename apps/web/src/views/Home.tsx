@@ -4,11 +4,11 @@ import type { CollectionSummary, StorySummary } from '@hexstory/shared';
 import { useDiscover } from '../api/queries';
 import { Panel } from '../components/Panel';
 import { StoryRow } from '../components/StoryRow';
-import { OPEN_HOME_EVENT, TourInvite } from '../components/Tour';
+import { HOME_COLLAPSED_KEY, OPEN_HOME_EVENT, TourInvite } from '../components/Tour';
 import { today, useRandomStory } from '../lib/discover';
 import { useMapState } from '../map/MapContext';
 
-const COLLAPSED_KEY = 'hexstory:home-collapsed';
+const COLLAPSED_KEY = HOME_COLLAPSED_KEY;
 /** Below this many published stories the home page invites people to write rather than to browse. */
 const YOUNG_SITE = 8;
 

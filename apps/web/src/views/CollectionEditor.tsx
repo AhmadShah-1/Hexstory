@@ -21,7 +21,7 @@ import { StoryPicker } from '../components/StoryPicker';
 import { useToast } from '../components/Toast';
 import { areaKm2 } from '../lib/format';
 import { useMapState } from '../map/MapContext';
-import { NotFound } from './NotFound';
+import { LoadFailed, NotFound } from './NotFound';
 
 /** A hand-picked story as the editor shows it. */
 interface Item {
@@ -71,7 +71,9 @@ export function CollectionEditor() {
   if (id && (collection.isLoading || (collection.isFetching && !collection.isFetchedAfterMount))) {
     return <Panel title="Loading…"><p className="muted pad">Loading…</p></Panel>;
   }
-  if (id && !collection.data) return <NotFound what="collection" />;
+  if (id && !collection.data) {
+    return collection.error ? <LoadFailed error={collection.error} what="collection" retry={() => collection.refetch()} /> : <NotFound what="collection" />;
+  }
   if (session.isLoading) return <Panel title="Loading…"><p className="muted pad">Loading…</p></Panel>;
   if (!user) {
     return (
@@ -270,12 +272,12 @@ function CollectionForm({ collection: loaded }: { collection: CollectionDetail |
           <div className="row collection-years">
             <label>
               <span className="visually-hidden">From year</span>
-              <input inputMode="numeric" placeholder="From" value={draft.fromYear} onChange={(e) => set('fromYear', e.target.value.replace(/[^\d-]/g, '').slice(0, 7))} />
+              <input placeholder="From" value={draft.fromYear} onChange={(e) => set('fromYear', e.target.value.replace(/[^\d-]/g, '').slice(0, 6))} />
             </label>
             <span className="muted">to</span>
             <label>
               <span className="visually-hidden">To year</span>
-              <input inputMode="numeric" placeholder="To" value={draft.toYear} onChange={(e) => set('toYear', e.target.value.replace(/[^\d-]/g, '').slice(0, 7))} />
+              <input placeholder="To" value={draft.toYear} onChange={(e) => set('toYear', e.target.value.replace(/[^\d-]/g, '').slice(0, 6))} />
             </label>
           </div>
           <span className="muted small">Use a minus sign for years BCE, e.g. -500.</span>

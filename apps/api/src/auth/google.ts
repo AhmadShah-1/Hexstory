@@ -1,7 +1,7 @@
 import { randomInt } from 'node:crypto';
 import { Google, decodeIdToken, generateCodeVerifier, generateState } from 'arctic';
 import type { FastifyPluginAsync } from 'fastify';
-import { LIMITS, TRUST } from '@hexstory/shared';
+import { LIMITS, TRUST, isReservedName } from '@hexstory/shared';
 import { isGoogleConfigured, type Config } from '../config.js';
 import type { Sql } from '../db.js';
 import { subjectHash } from '../services/moderation.js';
@@ -70,7 +70,7 @@ export const googleAuthRoutes =
         req.log.warn({ err }, 'google sign-in failed');
         return reply.redirect('/?signin=failed');
       }
-      if (!claims.sub || !claims.email || claims.email_verified === false) {
+      if (!claims.sub || !claims.email || claims.email_verified !== true) {
         return reply.redirect('/?signin=failed');
       }
 
@@ -114,7 +114,7 @@ export async function upsertGoogleUser(sql: Sql, config: Config, claims: GoogleC
 
   // Display names are public, so we suggest only the first name; users can change it on the welcome screen.
   const cleaned = sanitizeName(claims.given_name ?? claims.name ?? '');
-  const base = cleaned.length >= LIMITS.displayNameMin ? cleaned : 'Traveler';
+  const base = cleaned.length >= LIMITS.displayNameMin && !isReservedName(cleaned) ? cleaned : 'Traveler';
   for (let attempt = 0; attempt < 8; attempt++) {
     const candidate = attempt === 0 ? base : `${base.slice(0, LIMITS.displayNameMax - 5)}${randomInt(1000, 9999)}`;
     const [created] = await sql<{ id: string }[]>`

@@ -103,8 +103,9 @@ export async function addDevelopment(
     assertVisible(story, user);
     if (story.status === 'hidden') throw conflict('This story is hidden.');
     if (!story.currentRevisionId) throw conflict('This story is still waiting for its first review.');
-    const creatorOfUnreviewed = story.status === 'unreviewed' && story.createdBy === user.id;
-    const live = user.trustLevel >= liveEditThreshold(story.protectionLevel) || creatorOfUnreviewed;
+    // Unlike edits, a Newcomer's developments on their own unreviewed story wait for review: approving the
+    // story publishes the version the reviewer read, but nothing would otherwise check its timeline.
+    const live = user.trustLevel >= liveEditThreshold(story.protectionLevel);
     const [row] = await tx<{ id: string }[]>`
       INSERT INTO story_developments (story_id, author_id, year, month, day, title, body, lat, lng, place_name, sources, status,
         reviewed_by, reviewed_at, import_key)

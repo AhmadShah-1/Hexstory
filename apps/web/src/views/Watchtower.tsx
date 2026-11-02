@@ -53,6 +53,7 @@ export function Watchtower() {
   const setTab = (t: Tab) => setParams(t === 'pending' ? {} : { tab: t }, { replace: true });
   const viewerId = session.data?.user?.id;
 
+  if (session.isLoading) return <Panel title="Watchtower"><p className="muted pad">Loading…</p></Panel>;
   if (!isReviewer) {
     return (
       <Panel title="Watchtower">
@@ -84,25 +85,30 @@ export function Watchtower() {
       </div>
       <div className="pad">
         {data.isLoading && <p className="muted">Loading…</p>}
+        {data.error && !data.data && (
+          <p className="error-text">
+            {errorMessage(data.error)} <button className="link-button" onClick={() => data.refetch()}>Retry</button>
+          </p>
+        )}
         {tab === 'pending' && (
           <>
             <p className="queue-note">
               Edits wait here when the writer is new, the story is protected, or the change looks unusual (like
               removing most of the text or adding many links).
             </p>
-            {data.data?.pending.length ? data.data.pending.map((p) => <PendingCard key={p.revision.id} item={p} viewerId={viewerId} />) : <Empty />}
+            {data.data?.pending.length ? data.data.pending.map((p) => <PendingCard key={p.revision.id} item={p} viewerId={viewerId} />) : data.data && <Empty />}
           </>
         )}
         {tab === 'new' && (
           <>
             <p className="queue-note">Stories by newcomers stay private until a reviewer approves them.</p>
-            {data.data?.unreviewed.length ? data.data.unreviewed.map((s) => <NewStoryCard key={s.story.id} item={s} viewerId={viewerId} />) : <Empty />}
+            {data.data?.unreviewed.length ? data.data.unreviewed.map((s) => <NewStoryCard key={s.story.id} item={s} viewerId={viewerId} />) : data.data && <Empty />}
           </>
         )}
         {tab === 'timelines' && (
           <>
             <p className="queue-note">Developments added to an event's timeline by newcomers, or to protected stories, wait here.</p>
-            {data.data?.developments.length ? data.data.developments.map((d) => <DevelopmentCard key={d.id} item={d} viewerId={viewerId} />) : <Empty />}
+            {data.data?.developments.length ? data.data.developments.map((d) => <DevelopmentCard key={d.id} item={d} viewerId={viewerId} />) : data.data && <Empty />}
           </>
         )}
         {tab === 'corrections' && (
@@ -111,10 +117,10 @@ export function Watchtower() {
               Readers dispute a quoted statement and give evidence. Fix the story with a normal edit if they're right, then
               accept with a note; the note is public. Corrections to stories you started are for another reviewer.
             </p>
-            {data.data?.corrections.length ? data.data.corrections.map((c) => <CorrectionCard key={c.id} item={c} viewerId={viewerId} />) : <Empty />}
+            {data.data?.corrections.length ? data.data.corrections.map((c) => <CorrectionCard key={c.id} item={c} viewerId={viewerId} isModerator={trust >= TRUST.MODERATOR} />) : data.data && <Empty />}
           </>
         )}
-        {tab === 'reports' && (data.data?.reports.length ? data.data.reports.map((r) => <ReportCard key={r.id} report={r} />) : <Empty />)}
+        {tab === 'reports' && (data.data?.reports.length ? data.data.reports.map((r) => <ReportCard key={r.id} report={r} />) : data.data && <Empty />)}
       </div>
     </Panel>
   );
@@ -127,6 +133,11 @@ function otherChanges(before: PendingRevision['currentRevision'], after: Pending
   if (!before) return [];
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const changes: string[] = [];
+  if ((before.summary ?? '') !== (after.summary ?? '')) changes.push('summary');
+  if (!same([...before.categories].sort(), [...after.categories].sort())) changes.push('categories');
+  if (!same(before.location, after.location)) changes.push('place');
+  if (!same(before.people, after.people)) changes.push('people');
+  if (!same(before.links, after.links)) changes.push('connections');
   if (!same(before.sources, after.sources)) changes.push('sources');
   if (!same([before.start, before.end, before.isOngoing, before.isApprox], [after.start, after.end, after.isOngoing, after.isApprox])) changes.push('dates');
   if (!same([...before.cells].sort(), [...after.cells].sort())) changes.push('area on the map');
@@ -150,6 +161,9 @@ function PendingCard({ item, viewerId }: { item: PendingRevision; viewerId: stri
       </div>
       {c && c.title !== r.title && (
         <div className="small title-diff"><span className="muted">Title:</span> <WordDiff before={c.title} after={r.title} /></div>
+      )}
+      {c && (c.summary ?? '') !== (r.summary ?? '') && (
+        <div className="small title-diff"><span className="muted">Summary:</span> <WordDiff before={c.summary ?? ''} after={r.summary ?? ''} /></div>
       )}
       {isNewStory && <p className="small"><span className="chip chip-pending">New story</span> Accepting it publishes the story.</p>}
       {r.flags.map((f) => <span key={f} className="chip chip-flag">{f.replace('-', ' ')}</span>)}
@@ -258,7 +272,11 @@ function DevelopmentCard({ item, viewerId }: { item: Development & { storyTitle:
   );
 }
 
-function CorrectionCard({ item, viewerId }: { item: Correction & { storyTitle: string }; viewerId: string | undefined }) {
+function CorrectionCard({ item, viewerId, isModerator }: {
+  item: Correction & { storyTitle: string; storyCreatedBy: string };
+  viewerId: string | undefined;
+  isModerator: boolean;
+}) {
   const moderate = useModerateCorrection(item.storyId);
   const toast = useToast();
   const [note, setNote] = useState('');
@@ -283,6 +301,8 @@ function CorrectionCard({ item, viewerId }: { item: Correction & { storyTitle: s
       </ul>
       {item.author.id === viewerId ? (
         <p className="small muted">This is your own correction: another reviewer has to decide on it.</p>
+      ) : item.storyCreatedBy === viewerId && !isModerator ? (
+        <p className="small muted">You started this story: another reviewer has to decide on it.</p>
       ) : (
         <>
           <label className="field">

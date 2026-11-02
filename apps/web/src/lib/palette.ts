@@ -25,8 +25,10 @@ export const PERIOD_COLORS: Record<PeriodId, string> = {
   c21: '#3b0764',
 };
 
-/** Neutral dot colour for the "events" layer (and stories without a category). */
+/** Neutral dot colour for the "events" layer. */
 export const EVENT_COLOR = '#44403c';
+/** Stories without a category on the category layer: light, so they don't read as Disaster (also dark). */
+export const UNCATEGORISED_COLOR = '#a8a29e';
 /** Ongoing or recently developing events. */
 export const DEVELOPING_COLOR = '#c2410c';
 /** Density hexagons: a neutral grey-brown ramp, deliberately not the accent colour. */

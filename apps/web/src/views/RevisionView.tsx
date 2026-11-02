@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { TRUST } from '@hexstory/shared';
+import { CATEGORY_LABELS, RELATION_LABELS, TRUST, formatEventDate, type StoryRevision } from '@hexstory/shared';
 import { errorMessage } from '../api/client';
 import { useRestoreRevision, useReviewRevision, useRevision, useSession, useSetRevisionRemoved, useStory } from '../api/queries';
 import { Panel } from '../components/Panel';
@@ -74,7 +74,10 @@ export function RevisionView() {
         {showChanges && parent.data ? (
           <div className="story">
             <h2 className="story-title"><WordDiff before={parent.data.title} after={r.title} /></h2>
+            <p className="story-summary"><WordDiff before={parent.data.summary ?? ''} after={r.summary ?? ''} /></p>
             <WordDiff before={parent.data.body} after={r.body} />
+            <h3 className="section-label">Details</h3>
+            <WordDiff before={detailsText(parent.data)} after={detailsText(r)} />
             <h3 className="section-label">Sources</h3>
             <WordDiff
               before={parent.data.sources.map((s) => `${s.title} ${s.url ?? ''}`).join('\n')}
@@ -93,6 +96,19 @@ export function RevisionView() {
       {reporting && <ReportDialog open onClose={() => setReporting(false)} targetType="revision" targetId={r.id} />}
     </Panel>
   );
+}
+
+/** Everything besides title, summary, text and sources, one fact per line, so a diff shows what changed. */
+function detailsText(r: StoryRevision): string {
+  const loc = r.location ? `${r.location.placeName} (${r.location.lat.toFixed(4)}, ${r.location.lng.toFixed(4)})` : 'none';
+  return [
+    `Categories: ${r.categories.map((c) => CATEGORY_LABELS[c]).join(', ') || 'none'}`,
+    `Place: ${loc}`,
+    `Area: ${r.cells.length ? `${r.cells.length} map cell(s)` : 'the point only'}`,
+    `Date: ${formatEventDate(r)}`,
+    `People: ${r.people.join(', ') || 'none'}`,
+    `Connections: ${r.links.map((l) => `${RELATION_LABELS[l.relation]} ${l.storyId}`).join('; ') || 'none'}`,
+  ].join('\n');
 }
 
 /**

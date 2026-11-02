@@ -32,7 +32,7 @@ import { Panel } from '../components/Panel';
 import { PeopleField } from '../components/PeopleField';
 import { RichEditor } from '../components/RichEditor';
 import { SignInPrompt } from '../components/SignInPrompt';
-import { NotFound } from './NotFound';
+import { LoadFailed, NotFound } from './NotFound';
 import { useToast } from '../components/Toast';
 import { useMapState } from '../map/MapContext';
 
@@ -94,7 +94,9 @@ export function StoryEditor() {
   if (id && (story.isLoading || (story.isFetching && !story.isFetchedAfterMount))) {
     return <Panel title="Loading…"><p className="muted pad">Loading…</p></Panel>;
   }
-  if (id && !story.data) return <NotFound what="story" />;
+  if (id && !story.data) {
+    return story.error ? <LoadFailed error={story.error} what="story" retry={() => story.refetch()} /> : <NotFound what="story" />;
+  }
   if (story.data && !story.data.can.edit && session.data?.user) {
     return (
       <Panel title="Edit story" back={{ label: 'Back to story', to: `/s/${story.data.id}` }}>

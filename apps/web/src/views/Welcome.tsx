@@ -2,12 +2,12 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { displayNameSchema, type Me } from '@hexstory/shared';
 import { errorMessage } from '../api/client';
-import { useSession, useUpdateProfile } from '../api/queries';
+import { useSession, useSignOut, useUpdateProfile } from '../api/queries';
 import { Modal } from '../components/Modal';
 
 /**
- * Shown once after the first sign-in: pick a public name and accept the terms.
- * Until then the account can read but not contribute.
+ * Shown once after the first sign-in: pick a public name and accept the terms. Someone who doesn't want to
+ * can sign out instead and keep reading signed out.
  */
 export function Welcome() {
   const user = useSession().data?.user;
@@ -17,6 +17,7 @@ export function Welcome() {
 
 function WelcomeForm({ user }: { user: Me }) {
   const update = useUpdateProfile();
+  const signOut = useSignOut();
   // Starts as the suggested name; after that the field is entirely the user's (it may be emptied).
   const [name, setName] = useState(user.displayName);
   const [agreed, setAgreed] = useState(false);
@@ -49,6 +50,10 @@ function WelcomeForm({ user }: { user: Me }) {
         <button className="button button-primary button-block" disabled={!agreed || update.isPending}>
           Start exploring
         </button>
+        <button type="button" className="link-button small" disabled={signOut.isPending} onClick={() => signOut.mutate()}>
+          Not now: sign out and keep reading
+        </button>
+        {signOut.error && <p className="error-text">{errorMessage(signOut.error)}</p>}
       </form>
     </Modal>
   );

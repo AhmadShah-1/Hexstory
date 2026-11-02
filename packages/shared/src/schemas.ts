@@ -6,6 +6,8 @@ import { LIMITS } from './limits.js';
 import { richDocSchema } from './richtext.js';
 
 const MIN_YEAR = -50_000;
+/** Collections may reach past today ("2020 onwards"); the bound keeps year * 10000 inside Postgres int. */
+const MAX_COLLECTION_YEAR = 10_000;
 
 export function isHttpUrl(value: string): boolean {
   try {
@@ -170,8 +172,8 @@ export const collectionSchema = z
     kind: z.enum(COLLECTION_KINDS),
     cells: z.array(z.string().refine(isDisplayCell, 'Invalid region')).max(LIMITS.collectionCellsMax).default([]),
     categories: z.array(z.enum(CATEGORIES)).max(CATEGORIES.length).default([]),
-    fromYear: z.number().int().min(-50_000).refine((y) => y !== 0, 'There is no year 0').nullish(),
-    toYear: z.number().int().min(-50_000).refine((y) => y !== 0, 'There is no year 0').nullish(),
+    fromYear: z.number().int().min(MIN_YEAR).max(MAX_COLLECTION_YEAR, 'Use a year up to 10,000').refine((y) => y !== 0, 'There is no year 0').nullish(),
+    toYear: z.number().int().min(MIN_YEAR).max(MAX_COLLECTION_YEAR, 'Use a year up to 10,000').refine((y) => y !== 0, 'There is no year 0').nullish(),
     items: z
       .array(z.object({ storyId: z.uuid(), note: z.string().trim().max(LIMITS.collectionNoteMax).transform((v) => v || null).nullish() }))
       .max(LIMITS.collectionItemsMax, `At most ${LIMITS.collectionItemsMax} hand-picked stories`)
@@ -212,12 +214,24 @@ export const storyListQuerySchema = z.object({
 });
 export type StoryListQuery = z.input<typeof storyListQuerySchema>;
 
+const RESERVED_NAMES = new Set(['deleteduser', 'moderator', 'moderators', 'admin', 'administrator', 'reviewer', 'system', 'staff']);
+/**
+ * Names nobody may take, compared without case, spaces or punctuation so lookalikes ("Hexstory-Archive",
+ * "Deleted user.") are caught: anything with "hexstory" in it (the site and its Hexstory Archive account),
+ * the name shown for deleted accounts, and staff titles.
+ */
+export function isReservedName(name: string): boolean {
+  const key = name.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  return key.includes('hexstory') || RESERVED_NAMES.has(key);
+}
+
 export const displayNameSchema = z
   .string()
   .trim()
   .min(LIMITS.displayNameMin)
   .max(LIMITS.displayNameMax)
-  .regex(/^[\p{L}\p{N}][\p{L}\p{N} _.-]*$/u, 'Use letters, numbers, spaces, _ . or -');
+  .regex(/^[\p{L}\p{N}][\p{L}\p{N} _.-]*$/u, 'Use letters, numbers, spaces, _ . or -')
+  .refine((n) => !isReservedName(n), 'That name is reserved. Try another.');
 
 export const updateProfileSchema = z.object({
   displayName: displayNameSchema.optional(),

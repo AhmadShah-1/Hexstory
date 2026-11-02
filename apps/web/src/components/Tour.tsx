@@ -123,6 +123,8 @@ export function markTourSeen(): void {
 
 /** Asks the home panel to open (it may be collapsed to its pill). */
 export const OPEN_HOME_EVENT = 'hexstory:open-home';
+/** Where Home remembers that its panel was collapsed (sessionStorage). */
+export const HOME_COLLAPSED_KEY = 'hexstory:home-collapsed';
 
 const TourContext = createContext<{ start(): void; active: boolean }>({ start: () => {}, active: false });
 export const useTour = () => useContext(TourContext);
@@ -135,6 +137,13 @@ export function TourProvider({ children }: { children: ReactNode }) {
   const start = useCallback(() => {
     opener.current = document.activeElement as HTMLElement | null;
     // The tour walks through the home page, so go there and make sure its panel is open.
+    // Home may not be mounted yet (it reads its collapsed state from sessionStorage when it mounts), so clear
+    // that first, and also tell an already-mounted Home to open.
+    try {
+      sessionStorage.removeItem(HOME_COLLAPSED_KEY);
+    } catch {
+      /* storage unavailable: the event below still opens a mounted Home */
+    }
     navigate('/');
     window.dispatchEvent(new Event(OPEN_HOME_EVENT));
     setStep(0);

@@ -12,7 +12,7 @@ import {
   positionToYear,
   yearToPosition,
 } from '../lib/discover';
-import { CATEGORY_COLORS, DENSITY_RAMP, DEVELOPING_COLOR, EVENT_COLOR, PERIOD_COLORS } from '../lib/palette';
+import { CATEGORY_COLORS, DENSITY_RAMP, DEVELOPING_COLOR, EVENT_COLOR, PERIOD_COLORS, UNCATEGORISED_COLOR } from '../lib/palette';
 import { MAP_LAYERS, NO_FILTERS, hasFilters, useMapState, type MapLayer } from './MapContext';
 
 type TimeMode = 'all' | 'year' | 'decade' | 'range';
@@ -228,8 +228,8 @@ function YearInput({ label, value, onCommit }: { label: string; value: number; o
   return (
     <label className="year-input">
       <span className="visually-hidden">{label} (negative for BCE)</span>
+      {/* No numeric keypad: iOS's has no minus sign, and BCE years need one. */}
       <input
-        inputMode="numeric"
         value={text}
         title="Negative years are BCE"
         onFocus={() => setEditing(true)}
@@ -280,6 +280,7 @@ function Legend({ layer }: { layer: MapLayer }) {
         {CATEGORIES.map((c) => (
           <li key={c}><Swatch color={CATEGORY_COLORS[c]} />{CATEGORY_LABELS[c]}</li>
         ))}
+        <li><Swatch color={UNCATEGORISED_COLOR} />No category</li>
       </ul>
     );
   }

@@ -70,6 +70,7 @@ export async function reputationOf(sql: Db, userId: string): Promise<Standing> {
         WHERE s.created_by = ${userId} AND c.author_id <> ${userId} AND c.status = 'accepted' AND c.hidden_at IS NULL)::int AS corrected_stories,
       ((SELECT count(*) FROM story_revisions WHERE author_id = ${userId} AND origin IN ('create', 'edit') AND hidden_at IS NOT NULL)
         + (SELECT count(*) FROM story_developments WHERE author_id = ${userId} AND hidden_at IS NOT NULL)
+        + (SELECT count(*) FROM corrections WHERE author_id = ${userId} AND hidden_at IS NOT NULL)
         + (SELECT count(*) FROM stories WHERE created_by = ${userId} AND status = 'hidden' AND published_at IS NOT NULL))::int AS removed,
       (SELECT count(*) FROM (SELECT story_id FROM improved UNION SELECT story_id FROM corrected) o)::int AS others`;
   const { others, ...breakdown } = row!;

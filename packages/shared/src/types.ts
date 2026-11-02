@@ -294,7 +294,7 @@ export interface WatchtowerData {
   /** Developments held for review, with the story they belong to. */
   developments: (Development & { storyTitle: string })[];
   /** Open corrections, oldest first, with the story title. */
-  corrections: (Correction & { storyTitle: string })[];
+  corrections: (Correction & { storyTitle: string; storyCreatedBy: string })[];
 }
 
 export interface Page<T> {

@@ -154,21 +154,34 @@ export async function resolveCorrection(sql: Sql, user: SessionUser, id: string,
   for (const userId of new Set(affected)) await refreshTrust(sql, userId);
 }
 
-/** Reviewers remove an abusive correction. It stays visible to reviewers only. */
+/**
+ * Reviewers remove an abusive correction. It stays visible to reviewers only. The same people who may not
+ * decide a correction may not remove it (its author; the story's creator unless a moderator), and only
+ * moderators remove one already decided, so removal can't be used to bury a dispute or undo its points.
+ */
 export async function removeCorrection(sql: Sql, user: SessionUser, id: string, reason: string | null): Promise<void> {
   if (!canReview(user.trustLevel)) throw forbidden();
-  await sql.begin(async (tx) => {
-    const [row] = await tx`UPDATE corrections SET hidden_at = now() WHERE id = ${id} AND hidden_at IS NULL RETURNING id`;
-    if (!row) throw notFound('Correction');
+  const affected = await sql.begin(async (tx) => {
+    const [c] = await tx<{ authorId: string; status: CorrectionStatus; hiddenAt: Date | null; storyCreator: string }[]>`
+      SELECT c.author_id, c.status, c.hidden_at, s.created_by AS story_creator
+      FROM corrections c JOIN stories s ON s.id = c.story_id WHERE c.id = ${id} FOR UPDATE OF c`;
+    if (!c || c.hiddenAt) throw notFound('Correction');
+    const moderator = user.trustLevel >= TRUST.MODERATOR;
+    if (c.authorId === user.id) throw forbidden('You cannot remove your own correction.');
+    if (c.storyCreator === user.id && !moderator) throw forbidden('Another reviewer should handle corrections to a story you started.');
+    if (c.status !== 'open' && !moderator) throw forbidden('Only a moderator can remove a correction that was already decided.');
+    await tx`UPDATE corrections SET hidden_at = now() WHERE id = ${id}`;
     await closeReportsAbout(tx, user.id, 'correction', [id]);
     await logModAction(tx, user.id, 'remove-correction', 'correction', id, reason);
+    return [c.authorId, c.storyCreator];
   });
+  for (const userId of new Set(affected)) await refreshTrust(sql, userId);
 }
 
 /** Open corrections for the Watchtower, oldest first (not about hidden stories or from banned people). */
-export async function openCorrections(sql: Sql): Promise<(Correction & { storyTitle: string })[]> {
-  const rows = await sql<(CorrectionRow & { storyTitle: string })[]>`
-    SELECT ${correctionColumns(sql)}, cur.title AS story_title
+export async function openCorrections(sql: Sql): Promise<(Correction & { storyTitle: string; storyCreatedBy: string })[]> {
+  const rows = await sql<(CorrectionRow & { storyTitle: string; storyCreatedBy: string })[]>`
+    SELECT ${correctionColumns(sql)}, cur.title AS story_title, s.created_by AS story_created_by
     FROM corrections c
     JOIN users u ON u.id = c.author_id
     LEFT JOIN users ru ON ru.id = c.resolved_by
@@ -177,5 +190,5 @@ export async function openCorrections(sql: Sql): Promise<(Correction & { storyTi
     WHERE c.status = 'open' AND c.hidden_at IS NULL AND u.banned_at IS NULL AND s.status = 'active'
     ORDER BY c.created_at
     LIMIT 50`;
-  return rows.map((r) => ({ ...toCorrection(r), storyTitle: r.storyTitle }));
+  return rows.map((r) => ({ ...toCorrection(r), storyTitle: r.storyTitle, storyCreatedBy: r.storyCreatedBy }));
 }

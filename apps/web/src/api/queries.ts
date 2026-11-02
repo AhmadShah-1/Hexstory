@@ -81,7 +81,12 @@ export const keys = {
 };
 
 export type ModUserFilters = { q?: string; level?: 0 | 1 | 2 | 3; filter?: 'all' | 'banned' | 'requested' | 'reported' };
-export type AuditFilters = { actorId?: string; targetType?: 'story' | 'revision' | 'comment' | 'user' | 'report'; targetId?: string; action?: string };
+export type AuditFilters = {
+  actorId?: string;
+  targetType?: 'story' | 'revision' | 'comment' | 'user' | 'report' | 'development' | 'correction' | 'collection';
+  targetId?: string;
+  action?: string;
+};
 
 /** `?a=1&b=x` from the defined values only. */
 function queryString(params: Record<string, string | number | undefined>): string {

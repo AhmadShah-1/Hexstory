@@ -357,8 +357,8 @@ Thresholds below are the defaults; Moderators can change them (see "Rules Modera
 |---|---|---|---|
 | 0 | Newcomer | Sign in + accept terms | New stories are **private until a Reviewer approves them** (only you and Reviewers see them; you can keep editing them meanwhile). Edits to other people's stories are **held for review** |
 | 1 | Member | Account ≥ 3 days **and** reputation ≥ 15 (e.g. three published stories, or one well-sourced story plus an accepted correction) | Stories, edits and timeline developments go live immediately (unless auto-flagged or the story is protected); can start collections |
-| 2 | Reviewer | Account ≥ 30 days, reputation ≥ 150, **≥ 10 published stories started by someone else that they improved or corrected**, accepted work in **≥ 4 different weeks** | Watchtower: approve new stories, accept/reject held edits and developments, decide corrections, restore or remove versions, remove developments and corrections, hide stories and collections, feature stories and collections, resolve reports, **ask Moderators to ban someone**; see anyone's contributions |
-| 3 | Moderator | Email in `ADMIN_EMAILS` | Everything above + Moderation screen: ban (keeping or removing posts), unban, set levels, delete accounts, decline ban requests, read the audit log; protect and unhide stories and collections, put back removed versions, decide corrections to stories they started |
+| 2 | Reviewer | Account ≥ 30 days, reputation ≥ 150, **≥ 10 published stories started by someone else that they improved or corrected**, accepted work in **≥ 4 different weeks** | Watchtower: approve new stories, accept/reject held edits and developments, decide corrections, restore or remove versions, remove developments and open corrections (not their own, nor on stories they started), hide stories and collections, feature stories and collections, resolve reports, **ask Moderators to ban someone**; see anyone's contributions |
+| 3 | Moderator | Email in `ADMIN_EMAILS` | Everything above + Moderation screen: ban (keeping or removing posts), unban, set levels, delete accounts, decline ban requests, read the audit log; protect and unhide stories and collections, put back removed versions, decide (and remove) corrections to stories they started, remove decided corrections |
 
 **Reputation (quality, not quantity).** Computed on demand from what happened to someone's work
 (`reputationOf` in `services/users.ts`, points in `REPUTATION`), never stored, never public: only the person
@@ -375,7 +375,7 @@ and reviewers see it, and there are no rankings or leaderboards.
 | Each of your corrections turned down | −2 |
 | Each of your edits or new stories turned down | −2 |
 | Each accepted correction to a story you started | −2 |
-| Each version or development of yours removed, and each published story of yours hidden | −15 |
+| Each version, development or correction of yours removed, and each published story of yours hidden | −15 |
 
 The total never goes below 0. Drafts nobody published earn nothing, so repeatedly editing your own story or
 writing unreviewed drafts can't farm it (tested).
@@ -411,7 +411,8 @@ Moderators can't ban, delete or re-level other Moderators or themselves.
    it since) or hides it. Accepting a held *first* version of an unreviewed story also publishes it. Nobody
    can approve their own story.
 3. **Held edits and developments.** A timeline development follows the same rule as an edit (without the
-   auto-flags). An edit goes live only if the author's trust ≥ `max(Member, story.protection_level)`
+   auto-flags), except that a Newcomer's developments on their own still-unreviewed story are always held:
+   approving the story checks the version the reviewer read, not its timeline. An edit goes live only if the author's trust ≥ `max(Member, story.protection_level)`
    (or they created the still-unreviewed story) **and** it has no auto-flags (unless the author is a Reviewer).
 4. **Auto-flags** (`detectFlags`): removing > 60% of the body (`large-removal`); newcomer adding > 2 links,
    counting both linked text and typed URLs (`many-links`).
@@ -486,8 +487,8 @@ limits, contributions).
 
 **Event timelines.** Instead of a new story for every development in a war, protest or crisis, an event gets a
 chronological feed: `POST /api/stories/:id/developments` with a date, headline, optional details, optional
-place and at least one source. Developments go live under the same rule as edits (Members, the creator of a
-story still waiting for approval, protection levels), otherwise they wait in the Watchtower. They are not
+place and at least one source. Developments go live under the same rule as edits (Members, protection levels; but not the
+Newcomer creator of a story still waiting for approval), otherwise they wait in the Watchtower. They are not
 edited after posting: a mistake is fixed by a newer development, a correction, or a reviewer removing it
 (`hidden_at`, reviewers only). A live development bumps the story's `last_update_at`; a story with one in the
 last 30 days (`DEVELOPING_DAYS`), or marked ongoing, counts as **developing** (map layer, home page,
@@ -539,7 +540,7 @@ switcher never make requests. Up to `MAP_POINTS_MAX` (20,000) stories, most rece
 | XSS | React escaping; story content is a validated document rendered element by element (`RichContent.tsx`), never as HTML; no `dangerouslySetInnerHTML`; markdown only for bundled legal pages, without raw HTML; story and source links must be `http(s)` and render with `rel="nofollow ugc noopener noreferrer"`; images in stories can only be our own re-encoded uploads |
 | Content injection | Strict CSP (`script-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`; allow-listed: tiles origin, the R2 image domain in `img-src`, the R2 S3 endpoint in `connect-src`), `nosniff`, Helmet defaults. `index.html` is always served by Fastify so these headers apply on Vercel too |
 | SQL injection | Only parameterised postgres.js queries; identifiers only from fixed maps; `sql.unsafe` only runs migration files |
-| Malicious uploads | Originals (max 6 MB) go to a **private staging bucket** through a pre-signed PUT that is valid for 5 minutes and signs the exact byte count and `application/octet-stream`; the key is `<userId>/<uploadId>` and completion rebuilds it from the session, so nobody can claim another user's upload. The API then reads the original (size re-checked), decodes and **re-encodes to WebP** with sharp (strips EXIF/GPS, rejects non-images, 50 MP cap), publishes full + thumbnail, and deletes the original. If either write fails both are removed and the client gets an error. Staged leftovers expire by an R2 lifecycle rule (1 day). No URL fetching. 20 upload slots/hour/user. R2 credentials never reach the browser |
+| Malicious uploads | Originals (max 6 MB) go to a **private staging bucket** through a pre-signed PUT that is valid for 5 minutes and signs the exact byte count and `application/octet-stream`; the key is `<userId>/<uploadId>` and completion rebuilds it from the session, so nobody can claim another user's upload. The API then reads the original (size re-checked), decodes and **re-encodes to WebP** with sharp (strips EXIF/GPS, accepts only JPEG, PNG and WebP, 50 MP cap), publishes full + thumbnail, and deletes the original. If either write fails both are removed and the client gets an error. Staged leftovers expire by an R2 lifecycle rule (1 day). No URL fetching. 20 upload slots/hour/user. R2 credentials never reach the browser |
 | Resource abuse | 300 req/min/IP global and the upload limits (shared across instances when Redis is configured; fail open if Redis is down; the daily limits in Postgres always apply), per-user daily limits for stories, edits + developments, corrections, collections, uploads and reports, area size checked before expansion (stories and collections), 256 KB body limit, 60 s Function duration, CDN caching of public data |
 | Disputes used for abuse | Corrections must quote real text of the version read; one open dispute per person per statement; daily limits; reportable; reviewers remove abusive ones; nobody decides their own or (non-moderators) one about their own story |
 | Spoofed client IPs | Fastify trusts `X-Forwarded-For` only with `TRUST_PROXY=true` (default on Vercel, which overwrites the header with the real client IP) |
@@ -814,7 +815,7 @@ Designed so features can be added without touching unrelated code:
     stories someone edited on the site since are left alone unless `--update-edited`; developments are
     added once (by a hash of date and title).
   - **On the site:** imported stories are published at once (bulk review isn't realistic) and labelled
-    "Imported from public sources"; `remove-batch` hides a whole batch (audit log: `hide` by Hexstory
+    "Imported from public sources" while the Archive's version is current (an edit by anyone else drops the label); `remove-batch` hides a whole batch (audit log: `hide` by Hexstory
     Archive), and moderators can unhide single stories.
 
 - **Schema change:** add `apps/api/migrations/NNN_description.sql` (next number). Apply it with
@@ -836,7 +837,7 @@ Designed so features can be added without touching unrelated code:
   2. `npm ci && npm run build` (builds the SPA into `apps/web/dist`).
   3. `doppler run --config prd -- npm run start:local` under systemd (or `npm start` from the root, which runs
      it through Doppler); it migrates, then starts.
-  4. Put Caddy or nginx in front for TLS, proxying everything to :3000 **including WebSocket upgrades** on `/socket.io`.
+  4. Put Caddy or nginx in front for TLS, proxying everything to :3000.
 - **Backups:** on Neon, point-in-time restore within the plan's history window plus a periodic `pg_dump -Fc`
   of `DATABASE_URL_UNPOOLED` kept elsewhere; R2 objects are durable but not versioned (DEPLOYMENT.md §2). On a
   single server: nightly `pg_dump -Fc` and a copy of `UPLOAD_DIR`, both off the server. Test a restore.
@@ -881,6 +882,19 @@ Designed so features can be added without touching unrelated code:
 
 ## Changelog
 
+- **2026-11-02**: Fixes from a security and UI review. Security: collection years capped at 10,000 and the
+  rule SQL made overflow-safe (a huge year made every story page fail); a Newcomer's developments on their own
+  unreviewed story are held for review; removing a correction follows the deciding rules (not your own, not on
+  your own story unless a Moderator, decided ones by Moderators only) and removed corrections cost reputation;
+  names containing "hexstory", "Deleted user" and staff titles are reserved (lookalikes included); the
+  Imported label shows only while the imported version is current; uploads accept only JPEG/PNG/WebP; sign-in
+  requires Google's `email_verified: true`. UI: tablets (721–1100 px) put the panel below the top row so
+  the account buttons aren't covered by the place search; held-edit reviews show summary, category, place,
+  people and connection changes; the Watchtower shows loading and errors instead of "All clear", and hides
+  correction decisions on stories the reviewer started; category dots use a shown category when filtered and
+  uncategorised stories get their own colour and legend entry; the tour reopens a collapsed home panel; the
+  Welcome screen offers "sign out"; the audit log names the newer actions and links their targets; editors
+  show load errors; year boxes accept a minus sign on iOS.
 - **2026-11-02**: Terms of Service and Privacy Policy updated: governed by New Jersey law (operated from
   Jersey City); imported stories (Hexstory Archive, third-party photo licences); voluntary contributions;
   DMCA designated agent (DMCA-1084967) and counter-notices; hosting providers and US data location; people named in stories. The map's

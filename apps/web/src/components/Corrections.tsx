@@ -48,6 +48,10 @@ function CorrectionCard({ correction: c, story, viewer }: {
   // Nobody decides their own correction; only moderators decide those about a story they started.
   const canDecide = story.can.review && c.status === 'open' && !c.removed && !!viewer && c.author.id !== viewer.id
     && (story.createdBy.id !== viewer.id || viewer.trustLevel >= TRUST.MODERATOR);
+  // Mirrors removeCorrection: not your own, not on your own story, and decided ones only by moderators.
+  const isModerator = (viewer?.trustLevel ?? 0) >= TRUST.MODERATOR;
+  const canRemove = story.can.review && !c.removed && !!viewer && c.author.id !== viewer.id
+    && (story.createdBy.id !== viewer.id || isModerator) && (c.status === 'open' || isModerator);
   return (
     <article className={`correction ${c.removed ? 'correction-removed' : ''}`}>
       <div className="correction-head">
@@ -79,7 +83,7 @@ function CorrectionCard({ correction: c, story, viewer }: {
         </div>
       )}
       {canDecide && <DecideCorrection correction={c} story={story} />}
-      {story.can.review && !c.removed && <RemoveCorrection correction={c} storyId={story.id} />}
+      {canRemove && <RemoveCorrection correction={c} storyId={story.id} />}
     </article>
   );
 }

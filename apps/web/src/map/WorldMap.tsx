@@ -5,12 +5,12 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 // MapLibre locates its worker relative to its own module, which bundlers relocate; point at it explicitly.
 import mapWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 import { useNavigate } from 'react-router';
-import { cellAt, compact, periodOf, resForZoom, type DisplayRes, type MapPoint } from '@hexstory/shared';
+import { cellAt, compact, periodOf, resForZoom, type Category, type DisplayRes, type MapPoint } from '@hexstory/shared';
 import { useMapPoints } from '../api/queries';
 import { MAP_STYLE_URL } from '../features';
 import { useToast } from '../components/Toast';
 import { densityBin, filterPoints } from '../lib/discover';
-import { CATEGORY_COLORS, DENSITY_RAMP, DEVELOPING_COLOR, EVENT_COLOR, PERIOD_COLORS } from '../lib/palette';
+import { CATEGORY_COLORS, DENSITY_RAMP, DEVELOPING_COLOR, EVENT_COLOR, PERIOD_COLORS, UNCATEGORISED_COLOR } from '../lib/palette';
 import { cellsToFeatures, gridCells, pointsToFeatures, type CellFeatures } from './geo';
 import { isNarrowScreen, useMapState, type MapLayer } from './MapContext';
 
@@ -95,8 +95,12 @@ function setData(map: MapLibreMap | null, source: string, data: GeoJSON.FeatureC
 }
 
 /** The colour of one story's dot on each layer. */
-function dotColor(p: MapPoint, layer: MapLayer): string {
-  if (layer === 'category') return p.categories[0] ? CATEGORY_COLORS[p.categories[0]] : EVENT_COLOR;
+function dotColor(p: MapPoint, layer: MapLayer, shown: readonly Category[]): string {
+  if (layer === 'category') {
+    // With a category filter on, colour by a category being shown, not one that was filtered out.
+    const c = shown.length ? p.categories.find((x) => shown.includes(x)) : p.categories[0];
+    return c ? CATEGORY_COLORS[c] : UNCATEGORISED_COLOR;
+  }
   if (layer === 'period') return PERIOD_COLORS[periodOf(p.year)];
   if (layer === 'developing') return DEVELOPING_COLOR;
   return EVENT_COLOR;
@@ -228,7 +232,7 @@ export function WorldMap() {
     return pointsToFeatures(ordered, (p) => ({
       id: p.id,
       title: p.title,
-      color: dotColor(p, layer),
+      color: dotColor(p, layer, filters.categories),
       opacity: !lit || lit.has(p.id) ? 0.92 : 0.14,
       halo: layer === 'developing',
     }));
