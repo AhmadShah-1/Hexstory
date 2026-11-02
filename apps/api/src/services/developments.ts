@@ -95,9 +95,10 @@ export async function addDevelopment(
   user: SessionUser,
   storyId: string,
   input: DevelopmentData,
+  opts: { skipDailyLimit?: boolean; importKey?: string } = {},
 ): Promise<{ id: string; status: 'live' | 'pending' }> {
   const result = await sql.begin(async (tx) => {
-    await assertWithinDailyLimit(tx, user, 'edits');
+    if (!opts.skipDailyLimit) await assertWithinDailyLimit(tx, user, 'edits');
     const story = await fetchStory(tx, storyId, true);
     assertVisible(story, user);
     if (story.status === 'hidden') throw conflict('This story is hidden.');
@@ -106,11 +107,11 @@ export async function addDevelopment(
     const live = user.trustLevel >= liveEditThreshold(story.protectionLevel) || creatorOfUnreviewed;
     const [row] = await tx<{ id: string }[]>`
       INSERT INTO story_developments (story_id, author_id, year, month, day, title, body, lat, lng, place_name, sources, status,
-        reviewed_by, reviewed_at)
+        reviewed_by, reviewed_at, import_key)
       VALUES (${storyId}, ${user.id}, ${input.date.year}, ${input.date.month ?? null}, ${input.date.day ?? null}, ${input.title},
         ${input.body ?? null}, ${input.location?.lat ?? null}, ${input.location?.lng ?? null}, ${input.location?.placeName ?? null},
         ${tx.json(input.sources.map((s) => ({ title: s.title, url: s.url ?? null })))}, ${live ? 'accepted' : 'pending'},
-        null, null)
+        null, null, ${opts.importKey ?? null})
       RETURNING id`;
     if (live) await tx`UPDATE stories SET last_update_at = now() WHERE id = ${storyId}`;
     return { id: row!.id, status: live ? ('live' as const) : ('pending' as const) };

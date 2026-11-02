@@ -286,6 +286,12 @@ the target database is up to date and belongs to their environment, and stop if 
    `[migrate] <host>/<db> is up to date for "production"`.
 5. Work through the smoke test (§9).
 
+### Importing events in bulk
+
+To fill a new site with events, see [IMPORT.md](IMPORT.md). Import into preview first, then production,
+after the migrations are applied; photos need the environment's R2 variables (e.g. from its Doppler
+config).
+
 ### Releasing changes
 
 1. **No schema change:** push or merge to your production branch. Vercel builds and promotes automatically.

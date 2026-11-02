@@ -10,7 +10,8 @@
     "migrate": "tsx src/migrate.ts",
     "typecheck": "tsc -p .",
     "test": "vitest run",
-    "seed": "tsx src/seed.ts"
+    "seed": "tsx src/seed.ts",
+    "import": "tsx src/import.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.5",

@@ -11,3 +11,4 @@ uploads-staging/
 .vercel/
 .vercel
 .env*
+.import-cache.json

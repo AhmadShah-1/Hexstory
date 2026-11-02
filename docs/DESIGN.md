@@ -62,6 +62,7 @@ Principles:
 │   │   │   ├── routes/      Thin HTTP layer: parse input → call a service
 │   │   │   ├── services/    Business logic + SQL (stories, developments, corrections, collections, discover, users, reports, modlog)
 │   │   │   ├── storage/     Image storage interface: local disk (dev) and Cloudflare R2 (`r2.ts`)
+│   │   │   ├── import.ts    Bulk import command (docs/IMPORT.md); logic in import/ (format, link/place checks, run)
 │   │   │   └── seed.ts      Dev-only sample stories
 │   │   └── test/            Integration tests (real Postgres) and `*.unit.test.ts` (no services)
 │   └── web/                 React SPA (Vite)
@@ -78,6 +79,8 @@ Principles:
 ├── legal/                   Terms of Service, Privacy Policy (rendered in-app at /terms, /privacy)
 ├── docs/DESIGN.md           This file
 ├── docs/DEPLOYMENT.md       Vercel + Neon + R2 + Redis Cloud + Google setup, step by step
+├── docs/IMPORT.md           Bulk import: the file format, research rules for gathering events, how to import
+├── data/import/             Import files (events-NNN.jsonl) and their photos/
 ├── scripts/vercel-build.mjs The Vercel build: web app, API bundle, static output, database check
 ├── vercel.json              Vercel project config: build, Function settings, routing
 ├── doppler.yaml             Doppler project/config binding
@@ -285,11 +288,11 @@ Browser ── React SPA ────┼── /api/map/points, /api/discover �
 |---|---|
 | `users` | Google `sub`, email (private), public `display_name` (unique, case-insensitive), `trust_level` 0–3, `trust_locked` (level set by a Moderator), `terms_accepted_at`, `banned_at`, `deleted_at` |
 | `sessions` | `id` = SHA-256 of the cookie token (raw token never stored), expiry (30 days, sliding) |
-| `stories` | Identity + pointer `current_revision_id`, `status` (unreviewed/active/hidden), `protection_level`, `cell_count`, `published_at` + `published_revision_id` (when it first became public, and with which version; migration 006), `last_update_at` (latest accepted version or development) and `featured_at` (reviewers' pick for the home page; migration 007) |
+| `stories` | Identity + pointer `current_revision_id`, `status` (unreviewed/active/hidden), `protection_level`, `cell_count`, `published_at` + `published_revision_id` (when it first became public, and with which version; migration 006), `last_update_at` (latest accepted version or development) and `featured_at` (reviewers' pick for the home page; migration 007), `import_key` (unique; the event's key in an import file) and `import_batch` (migration 008) |
 | `story_revisions` | Append-only content: title, `summary`, `content` (rich document, jsonb), `body` (plain text derived from content), `image_key`/`image_credit` (the first image, used as thumbnail), `categories` (text[]), point `lat`/`lng` + `place_name`, compact `cells` (the area, or the point's cell), dates, sources (jsonb, ≥1 enforced by CHECK), `people` (text[]), `links` (jsonb `[{storyId, relation}]`), `status` (pending/accepted/rejected), `flags`, `hidden_at` (removed from the history), `origin` (create/edit/restore/rollback: copies aren't counted as the copier's edits), generated `source_count` and `sort_key` |
 | `story_cells` | Derived index of the current revision's cells at res 2–5 |
 | `story_links` | Derived index of the current revision's `links` (from, to, relation), rebuilt with `story_cells`, so a story can list what links **to** it (migration 007) |
-| `story_developments` | An event's timeline: date parts + generated `sort_key`, headline, optional details, optional point, sources, `status` (pending/accepted/rejected), `hidden_at`. Not edited after posting (migration 007) |
+| `story_developments` | An event's timeline: date parts + generated `sort_key`, headline, optional details, optional point, sources, `status` (pending/accepted/rejected), `hidden_at`. Not edited after posting (migration 007); `import_key` for imported ones (migration 008) |
 | `corrections` | A disputed statement: the `revision_id` read, the exact `quote`, `problem`, `proposal`, `evidence` (sources), `status` (open/accepted/rejected), public `resolution_note`, `resolved_by/at`, optional `fixed_revision_id`, `hidden_at` (migration 007) |
 | `collections`, `collection_items` | Narratives: title, description, `kind` (place/theme), rules (`cells` compacted at res 2–5, `categories`, `from_year`/`to_year`), `status` (active/hidden), `featured_at`; hand-picked items with `position` and a note (migration 007) |
 | `comments` | The retired Square's messages. Dormant: no longer read or written; kept so no data is destroyed (drop it in a later release if wanted) |
@@ -782,6 +785,37 @@ Designed so features can be added without touching unrelated code:
 
 ## 12. Procedures
 
+- **Bulk import of events:** see [docs/IMPORT.md](IMPORT.md) (Part 1 is the brief for gathering events,
+  Part 2 for importing). In short: `npm run import:check -- data/import/*.jsonl --check-urls`, then
+  `npm run import -- dry-run|apply … --env development [--batch name]`; for preview/production
+  `doppler run -c prd -- npm run import:remote -- apply … --env production`; undo with
+  `remove-batch <name>`. How it works:
+  - **Format:** JSON Lines, one event per line with a stable `key`, the story fields, sources (each with a
+    link), connections by key, an optional freely licensed photo (Wikimedia Commons; licence, author and file
+    page required) and a timeline of developments. Validated by `apps/api/src/import/format.ts` with the
+    site's own schemas plus import rules; `check` needs no database.
+  - **Checks:** every source and photo link is fetched (404/410/unknown domain = error, so invented URLs
+    are caught; blocked or slow sites = warning); `--check-places` looks up every place (the event's and its
+    developments') with OpenStreetMap's Nominatim, one request a second as its usage policy requires
+    (`IMPORT_GEOCODER_URL` to use another Nominatim instance), and warns when the coordinates lie more
+    than 10 km outside the area it knows for that place (its bounding box, so a province or a lake gets
+    more room than a town) or the place isn't found; lookups that fail are reported as a warning, never
+    passed silently. The site's own place search still uses Photon (`GEOCODER_URL`). Results are cached
+    for 30 days in `.import-cache.json` next to the files (git-ignored).
+  - **Writing** (`import/run.ts`): as the **Hexstory Archive** account (`google_sub`
+    `system:hexstory-archive`: can't sign in; Reviewer level, locked; exempt from daily limits through an
+    internal option no HTTP route passes), through `createStory`/`editStory`/`addDevelopment`, so indexes,
+    links and timelines are built as for any story. Photos are re-encoded exactly like uploads
+    (`services/images.ts`) and stored under a key derived from their bytes, then shown first in the story
+    with "Photo: author, licence" and their file page added as a source. Connections between stories created
+    in the same run are filled into those just-created versions once all exist (`fillImportedLinks`), so no
+    extra versions are made. Re-running is idempotent (by `import_key`); a changed line becomes a new version;
+    stories someone edited on the site since are left alone unless `--update-edited`; developments are
+    added once (by a hash of date and title).
+  - **On the site:** imported stories are published at once (bulk review isn't realistic) and labelled
+    "Imported from public sources"; `remove-batch` hides a whole batch (audit log: `hide` by Hexstory
+    Archive), and moderators can unhide single stories.
+
 - **Schema change:** add `apps/api/migrations/NNN_description.sql` (next number). Apply it with
   `npm run migrate` (local), then `npm run migrate:preview` / `migrate:production` **before** deploying code
   that needs it (DEPLOYMENT.md §6). Keep migrations backward compatible (add, then remove in a later
@@ -839,6 +873,18 @@ Designed so features can be added without touching unrelated code:
 - Map tiles depend on the public OpenFreeMap service; self-host or switch provider via `VITE_MAP_STYLE_URL`.
 
 ## Changelog
+
+- **2026-11-02**: Import place check (`import/checks.ts`) now uses OpenStreetMap's Nominatim (1 request a
+  second) instead of Photon, also checks developments' locations, compares against the place's bounding box
+  (10 km margin) rather than a flat 100 km, and reports failed lookups instead of passing silently (Photon
+  was unreachable from a development machine and the check had reported no problems having checked nothing).
+- **2026-11-02**: Bulk import of events (`docs/IMPORT.md`, `npm run import:check | import | import:remote`):
+  JSON Lines files with sources, places, connections, timelines and freely licensed photos; validation with
+  the site's schemas, live link and place checks, idempotent re-runs, batch removal; stories written by the
+  Hexstory Archive account and labelled "Imported from public sources". Image re-encoding moved to
+  `services/images.ts` (shared by uploads and imports). Fixed: the "Nothing changed" check compared JSON
+  read back from `jsonb` (which reorders keys) with the submitted JSON, so a re-save of identical content
+  counted as a change. Migration `008_imports.sql`.
 
 - **2026-11-01**: Guided tour: a "?" button in the top bar and a one-time invitation on the home panel walk
   new visitors through the main features in nine steps (§9).

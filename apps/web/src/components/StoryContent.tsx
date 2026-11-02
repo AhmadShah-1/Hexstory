@@ -38,11 +38,17 @@ export function StoryContent({ revision, cellCount, story, notice, timeline, cor
   return (
     <article className="story">
       <h2 className="story-title">{revision.title}</h2>
-      {story && (story.featured || developing || story.isHistorical) && (
+      {story && (story.featured || developing || story.isHistorical || story.imported) && (
         <div className="story-labels">
           {story.featured && <span className="chip chip-quiet">Featured</span>}
           {developing && <span className="chip chip-developing">{revision.isOngoing ? 'Ongoing' : 'Developing'}</span>}
           {story.isHistorical && <span className="chip chip-quiet" title="An account of an older event, newly added">Newly documented history</span>}
+          {/* Bulk-loaded from public sources (docs/IMPORT.md): say so, and invite corrections. */}
+          {story.imported && (
+            <span className="chip chip-quiet" title="Added in bulk from the public sources listed below. Spotted a mistake? Dispute it or edit the story.">
+              Imported from public sources
+            </span>
+          )}
         </div>
       )}
 

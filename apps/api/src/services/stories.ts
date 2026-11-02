@@ -105,6 +105,19 @@ export interface StoryRow {
   publishedRevisionId: string | null;
   lastUpdateAt: Date;
   featuredAt: Date | null;
+  /** Set for stories loaded by the importer (docs/IMPORT.md). */
+  importKey: string | null;
+  importBatch: string | null;
+}
+
+/**
+ * Internal options for the importer only; no HTTP route passes them. Imports run as the system
+ * archive account, which isn't subject to the per-person daily limits.
+ */
+export interface SystemWriteOptions {
+  skipDailyLimit?: boolean;
+  importKey?: string;
+  importBatch?: string;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -429,6 +442,7 @@ export async function getStory(deps: StoryDeps, id: string, viewer: SessionUser 
     publishedAt: story.publishedAt?.toISOString() ?? null,
     lastUpdateAt: story.lastUpdateAt.toISOString(),
     featured: !!story.featuredAt,
+    imported: !!story.importBatch,
     isHistorical: !revision.isOngoing && gapDays > HISTORICAL_GAP_DAYS,
     connections: await connectionsOf(deps, id, revision.links, viewer),
     developments: developments.items,
@@ -648,7 +662,7 @@ export async function assertWithinDailyLimit(sql: Db, user: SessionUser, kind: '
   }
 }
 
-export async function createStory(deps: StoryDeps, user: SessionUser, input: StoryInput): Promise<WriteResult> {
+export async function createStory(deps: StoryDeps, user: SessionUser, input: StoryInput, opts: SystemWriteOptions = {}): Promise<WriteResult> {
   const { sql } = deps;
   const content = await prepareContent(deps, user, input, null);
   const flags = detectFlags({ previousBody: null, body: content.body, links: docLinkCount(content.content), trustLevel: user.trustLevel });
@@ -658,10 +672,10 @@ export async function createStory(deps: StoryDeps, user: SessionUser, input: Sto
   const storyStatus: StoryStatus = user.trustLevel >= TRUST.MEMBER ? 'active' : 'unreviewed';
 
   const result = await sql.begin(async (tx) => {
-    await assertWithinDailyLimit(tx, user, 'stories');
+    if (!opts.skipDailyLimit) await assertWithinDailyLimit(tx, user, 'stories');
     const [story] = await tx<{ id: string }[]>`
-      INSERT INTO stories (status, created_by)
-      VALUES (${storyStatus}, ${user.id})
+      INSERT INTO stories (status, created_by, import_key, import_batch)
+      VALUES (${storyStatus}, ${user.id}, ${opts.importKey ?? null}, ${opts.importBatch ?? null})
       RETURNING id`;
     const storyId = story!.id;
     const revisionId = await insertRevision(tx, {
@@ -682,10 +696,17 @@ export async function createStory(deps: StoryDeps, user: SessionUser, input: Sto
   return result;
 }
 
+/** JSON with object keys sorted, so values read back from jsonb (which reorders keys) compare equal. */
+const canonical = (value: unknown): string =>
+  JSON.stringify(value, (_k, v: unknown) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v as Record<string, unknown>).filter(([, x]) => x !== undefined).sort(([x], [y]) => x.localeCompare(y)))
+      : v);
+
 const sameContent = (a: Content, b: RevisionRow) =>
-  JSON.stringify([a.title, a.summary, a.content, a.categories, a.lat, a.lng, a.place_name, a.people, a.links, a.cells,
+  canonical([a.title, a.summary, a.content, a.categories, a.lat, a.lng, a.place_name, a.people, a.links, a.cells,
     a.start_year, a.start_month, a.start_day, a.end_year, a.end_month, a.end_day, a.is_ongoing, a.is_approx, a.sources]) ===
-  JSON.stringify([b.title, b.summary, b.content ?? legacyDoc(b.body, b.imageKey, b.imageCredit), b.categories, b.lat, b.lng, b.placeName,
+  canonical([b.title, b.summary, b.content ?? legacyDoc(b.body, b.imageKey, b.imageCredit), b.categories, b.lat, b.lng, b.placeName,
     b.people, b.links.map((l) => ({ storyId: l.storyId, relation: l.relation })), [...b.cells].sort(),
     b.startYear, b.startMonth, b.startDay, b.endYear, b.endMonth, b.endDay, b.isOngoing, b.isApprox,
     b.sources.map((s) => ({ title: s.title, url: s.url ?? null }))]);
@@ -695,12 +716,13 @@ export async function editStory(
   user: SessionUser,
   storyId: string,
   input: EditStoryData,
+  opts: SystemWriteOptions = {},
 ): Promise<WriteResult> {
   const { sql } = deps;
   const content = await prepareContent(deps, user, input, storyId);
 
   const result = await sql.begin(async (tx) => {
-    await assertWithinDailyLimit(tx, user, 'edits');
+    if (!opts.skipDailyLimit) await assertWithinDailyLimit(tx, user, 'edits');
     const story = await fetchStory(tx, storyId, true);
     assertVisible(story, user);
     if (!story.currentRevisionId) throw conflict('This story is still waiting for its first review.');
@@ -736,6 +758,29 @@ export async function editStory(
   });
   if (result.status === 'live') await refreshTrust(sql, user.id);
   return result;
+}
+
+/** Whether saving `input` would change the story's current version (what editStory calls "Nothing changed"). */
+export async function differsFromCurrent(deps: StoryDeps, user: SessionUser, storyId: string, input: StoryInput): Promise<boolean> {
+  const story = await fetchStory(deps.sql, storyId);
+  if (!story?.currentRevisionId) return true;
+  const current = await fetchRevision(deps.sql, story.currentRevisionId);
+  if (!current) return true;
+  return !sameContent(await prepareContent(deps, user, input, storyId), current);
+}
+
+/**
+ * Importer only: fills in the links of a version that the same import run just created (and that is
+ * still current), once the stories it links to exist. Nobody has seen that version without its links
+ * yet, so this completes it rather than rewriting history; then the link index is rebuilt.
+ */
+export async function fillImportedLinks(tx: Db, storyId: string, revisionId: string, links: { storyId: string; relation: LinkRelation }[]): Promise<void> {
+  const [row] = await tx`
+    UPDATE story_revisions SET links = ${tx.json(links)}
+    WHERE id = ${revisionId} AND story_id = ${storyId}
+      AND id = (SELECT current_revision_id FROM stories WHERE id = ${storyId})
+    RETURNING id`;
+  if (row) await applyRevision(tx, storyId, { id: revisionId });
 }
 
 export async function reviewRevision(

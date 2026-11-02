@@ -123,6 +123,8 @@ export interface StoryDetail {
   publishedAt: string | null;
   lastUpdateAt: string;
   featured: boolean;
+  /** Loaded in bulk from public sources by the importer (docs/IMPORT.md) rather than written on the site. */
+  imported: boolean;
   isHistorical: boolean;
   /** Links in both directions, from this story's point of view, to stories the viewer can see. */
   connections: StoryConnection[];

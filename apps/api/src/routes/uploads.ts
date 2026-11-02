@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
-import sharp from 'sharp';
 import { z } from 'zod';
 import { LIMITS, uploadIntentSchema, type UploadTicket, type UploadedImage } from '@hexstory/shared';
 import { HttpError, badRequest, notFound } from '../errors.js';
@@ -8,6 +7,7 @@ import { parse, requireWriter } from '../http.js';
 import { POLICY } from '../policy.js';
 import { claimUpload, hasOpenUpload, recordStoredUpload, releaseUpload, reserveUpload } from '../services/uploads.js';
 import { imageFileNames, stagedKey } from '../storage/index.js';
+import { encodeImage } from '../services/images.js';
 import type { Deps } from './deps.js';
 
 const TOO_LARGE = 'Images must be smaller than 6 MB.';
@@ -81,9 +81,7 @@ export const uploadRoutes =
 
       let full: Buffer, thumb: Buffer;
       try {
-        const image = sharp(original, { limitInputPixels: 50_000_000 }).rotate();
-        full = await image.clone().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 82 }).toBuffer();
-        thumb = await image.clone().resize(160, 160, { fit: 'cover', position: 'attention' }).webp({ quality: 75 }).toBuffer();
+        ({ full, thumb } = await encodeImage(original));
       } catch {
         await discardOriginal();
         throw badRequest('That file is not an image we can read. Try a JPEG, PNG or WebP.', 'bad-image');

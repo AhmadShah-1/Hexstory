@@ -44,6 +44,10 @@ happened, **where** (a place on the map, and optionally a wider area), a **short
   need a new story for every development. Anyone can add a dated **development** with its own place and
   sources to the event's timeline.
 - **Versions**: every edit is kept. Nothing is ever overwritten, and any change can be undone.
+- **Imported stories**: to give the map a starting point, some stories were added in bulk by the
+  **Hexstory Archive** account from public sources (encyclopedias and established news organisations, each
+  listed on the story) with freely licensed photos. They are labelled "Imported from public sources" and
+  are open to edits and corrections like any other story.
 
 Lists can be ordered by when events **happened**, when they were **published**, by **latest updates**, by how
 **connected** they are (how many other stories name them as a cause or a part, how far their timeline has
