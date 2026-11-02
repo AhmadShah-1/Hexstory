@@ -4,6 +4,7 @@ import type { CollectionSummary, StorySummary } from '@hexstory/shared';
 import { useDiscover } from '../api/queries';
 import { Panel } from '../components/Panel';
 import { StoryRow } from '../components/StoryRow';
+import { OPEN_HOME_EVENT, TourInvite } from '../components/Tour';
 import { today, useRandomStory } from '../lib/discover';
 import { useMapState } from '../map/MapContext';
 
@@ -51,6 +52,16 @@ export function Home() {
     saveCollapsed(value);
   };
 
+  // The tour walks through this panel, so it reopens it if it was collapsed.
+  useEffect(() => {
+    const open = () => {
+      setCollapsed(false);
+      saveCollapsed(false);
+    };
+    window.addEventListener(OPEN_HOME_EVENT, open);
+    return () => window.removeEventListener(OPEN_HOME_EVENT, open);
+  }, []);
+
   if (collapsed) {
     return (
       <button className="discover-pill button button-floating" onClick={() => collapse(false)}>
@@ -73,6 +84,7 @@ function HomeContent() {
 
   return (
     <div className="home">
+      <TourInvite />
       <div className="discover-actions" role="group" aria-label="Ways to start">
         <button className="discover-action" disabled={random.busy} onClick={() => random.go('surprise')}>
           <span className="discover-action-title">Surprise me</span>

@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Link, Outlet, useSearchParams } from 'react-router';
 import { ToastProvider, useToast } from '../components/Toast';
+import { TourProvider } from '../components/Tour';
 import { MapControls } from '../map/MapControls';
 import { MapProvider } from '../map/MapContext';
 import { WorldMap } from '../map/WorldMap';
@@ -21,6 +22,7 @@ export function AppShell() {
   return (
     <ToastProvider>
       <MapProvider>
+        <TourProvider>
         <div className="app">
           <WorldMap />
           <TopBar />
@@ -30,6 +32,7 @@ export function AppShell() {
           <SignInNotice />
           <Welcome />
         </div>
+        </TourProvider>
       </MapProvider>
     </ToastProvider>
   );

@@ -558,6 +558,14 @@ switcher never make requests. Up to `MAP_POINTS_MAX` (20,000) stories, most rece
   each linking to the matching Explore view. With fewer than 8 published stories an invitation to write
   replaces anything that would look empty; nothing ever says "nobody here". × / Escape collapses the panel to
   a "Discover stories" pill (remembered for the visit in `sessionStorage`); the map stays interactive.
+- **Guided tour** (`components/Tour.tsx`): a "?" button in the top bar (always available) and a one-time
+  "New here? Take the tour" invitation at the top of the Discover panel (dismissal remembered in
+  `localStorage` as `hexstory:tour-seen`; safe when storage is blocked). Nine short steps on the home page:
+  welcome, the quick actions, a story row, the map (dots, clicking a region), place search, the timeline and
+  "Categories & layers", Collections, signing in to contribute, done. Each step dims the page except one
+  element (the first visible match of its selectors, so phones and desktops can point at different elements;
+  steps whose element isn't on screen show a centred card), with Back / Next / Skip, arrow keys and Escape.
+  Starting the tour goes to `/` and reopens a collapsed Discover panel. No library.
 - **Globe** (`map/WorldMap.tsx`): MapLibre globe; a faint res-2 hex grid covers the world when zoomed out,
   finer grids appear as you zoom. Stories are **dots at their precise places** (the old orange "occupied
   hexagon" tint is gone). Clicking a dot opens the story (5 px tolerance for fingers); clicking anywhere else
@@ -831,6 +839,9 @@ Designed so features can be added without touching unrelated code:
 - Map tiles depend on the public OpenFreeMap service; self-host or switch provider via `VITE_MAP_STYLE_URL`.
 
 ## Changelog
+
+- **2026-11-01**: Guided tour: a "?" button in the top bar and a one-time invitation on the home panel walk
+  new visitors through the main features in nine steps (§9).
 
 - **2026-11-01**: Connected history and guided discovery. **Removed the Square** (live chat, presence,
   Socket.IO, Redis Pub/Sub; the `comments` table stays dormant); Redis is now optional and each instance holds

@@ -3,6 +3,7 @@ import { TRUST } from '@hexstory/shared';
 import { useSession } from '../api/queries';
 import { PlaceSearch } from '../components/PlaceSearch';
 import { SignInButton } from '../components/SignInPrompt';
+import { TourButton } from '../components/Tour';
 import { initials } from '../lib/format';
 
 export function TopBar() {
@@ -20,6 +21,7 @@ export function TopBar() {
       </Link>
       <PlaceSearch />
       <div className="account">
+        <TourButton />
         {user ? (
           <>
             {user.trustLevel >= TRUST.MODERATOR && (
