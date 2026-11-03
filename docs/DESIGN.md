@@ -111,6 +111,7 @@ rules the API enforces, so client hints and server errors never disagree.
 | Image storage | Cloudflare R2 via its S3 API, signed with `aws4fetch` | Cheap egress, custom-domain CDN; tiny fetch-based client |
 | Shared state (optional) | Redis Cloud (Vercel Marketplace) via `ioredis` | Atomic counters and small caches shared by Function instances |
 | Tests | Vitest (shared unit tests, API integration tests, `ioredis-mock` for two-instance tests) | |
+| Analytics | Microsoft Clarity (`lib/clarity.ts`), production builds only | Free session recordings and heatmaps; loaded from the bundle so the CSP stays strict |
 | Map data | One cached list of story points, filtered/coloured/counted in the browser | Timeline and layer changes cost no requests |
 
 Locally the API runs TypeScript directly with `tsx`. For Vercel, `scripts/vercel-build.mjs` bundles
@@ -175,6 +176,7 @@ in [DEPLOYMENT.md §7](DEPLOYMENT.md#7-environment-variable-reference). The impo
 | `STRIPE_SUPPORT_URL`, `PAYPAL_SUPPORT_URL` | no (public, runtime) | Support page links (Stripe Payment Link on `buy.stripe.com`; PayPal.Me on `www.paypal.com/paypalme/…` or `paypal.me`). Validated at startup; an invalid value hides that option and logs a warning. Redeploy on Vercel after changing. See [DEPLOYMENT.md](DEPLOYMENT.md#support-links) |
 | `VITE_MAP_STYLE_URL` | no (build-time) | Alternative MapLibre style; also add its origin to `MAP_ORIGINS` in `apps/api/src/app.ts` (CSP) |
 | `VITE_FEATURE_ADS` | no (build-time) | `true` renders ad slots (see Extension points) |
+| `VITE_CLARITY_PROJECT_ID` | no (build-time) | Microsoft Clarity project; defaults to `z80oz1x04t`, `''` turns Clarity off. Only production builds (including Vercel previews) load it |
 
 `VERCEL` and `VERCEL_ENV` are set by Vercel. `VERCEL_ENV` (`production`/`preview`) decides which database
 the deployment may use (see "Environments" below); locally it is `development`.
@@ -538,14 +540,14 @@ switcher never make requests. Up to `MAP_POINTS_MAX` (20,000) stories, most rece
 | Session theft | httpOnly cookie, `Secure` in production, only a SHA-256 of the token stored, 30-day sliding expiry |
 | OAuth | State + PKCE (arctic); email must be verified; `returnTo` only accepts plain same-site paths (no `//`, backslashes, control chars or spaces) |
 | XSS | React escaping; story content is a validated document rendered element by element (`RichContent.tsx`), never as HTML; no `dangerouslySetInnerHTML`; markdown only for bundled legal pages, without raw HTML; story and source links must be `http(s)` and render with `rel="nofollow ugc noopener noreferrer"`; images in stories can only be our own re-encoded uploads |
-| Content injection | Strict CSP (`script-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`; allow-listed: tiles origin, the R2 image domain in `img-src`, the R2 S3 endpoint in `connect-src`), `nosniff`, Helmet defaults. `index.html` is always served by Fastify so these headers apply on Vercel too |
+| Content injection | Strict CSP (`script-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`; allow-listed: tiles origin, the R2 image domain in `img-src`, the R2 S3 endpoint in `connect-src`, Microsoft Clarity's `https://*.clarity.ms` in `script-src`/`connect-src`/`img-src` plus `https://c.bing.com` in `img-src`), `nosniff`, Helmet defaults. `index.html` is always served by Fastify so these headers apply on Vercel too |
 | SQL injection | Only parameterised postgres.js queries; identifiers only from fixed maps; `sql.unsafe` only runs migration files |
 | Malicious uploads | Originals (max 6 MB) go to a **private staging bucket** through a pre-signed PUT that is valid for 5 minutes and signs the exact byte count and `application/octet-stream`; the key is `<userId>/<uploadId>` and completion rebuilds it from the session, so nobody can claim another user's upload. The API then reads the original (size re-checked), decodes and **re-encodes to WebP** with sharp (strips EXIF/GPS, accepts only JPEG, PNG and WebP, 50 MP cap), publishes full + thumbnail, and deletes the original. If either write fails both are removed and the client gets an error. Staged leftovers expire by an R2 lifecycle rule (1 day). No URL fetching. 20 upload slots/hour/user. R2 credentials never reach the browser |
 | Resource abuse | 300 req/min/IP global and the upload limits (shared across instances when Redis is configured; fail open if Redis is down; the daily limits in Postgres always apply), per-user daily limits for stories, edits + developments, corrections, collections, uploads and reports, area size checked before expansion (stories and collections), 256 KB body limit, 60 s Function duration, CDN caching of public data |
 | Disputes used for abuse | Corrections must quote real text of the version read; one open dispute per person per statement; daily limits; reportable; reviewers remove abusive ones; nobody decides their own or (non-moderators) one about their own story |
 | Spoofed client IPs | Fastify trusts `X-Forwarded-For` only with `TRUST_PROXY=true` (default on Vercel, which overwrites the header with the real client IP) |
 | Environment mix-ups | Database environment marker checked at build and start; migrations only by explicit command over a direct connection; Redis keys prefixed per environment (§4) |
-| Privacy | Emails and Google IDs never leave the API; Google profile pictures and full names are never stored; account deletion anonymises the user and deletes sessions; "History near me" uses the device's location only in the browser (never sent); reputation is visible only to the person and reviewers |
+| Privacy | Emails and Google IDs never leave the API (Clarity is identified only with the public user id and display name); Google profile pictures and full names are never stored; account deletion anonymises the user and deletes sessions; "History near me" uses the device's location only in the browser (never sent); reputation is visible only to the person and reviewers |
 
 ## 9. UI design decisions
 
@@ -879,9 +881,18 @@ Designed so features can be added without touching unrelated code:
 - Search is `ILIKE` over titles, summaries, places and people: fine for thousands of stories; Postgres
   `tsvector` (or `pg_trgm`) is the intended next step.
 - Map tiles depend on the public OpenFreeMap service; self-host or switch provider via `VITE_MAP_STYLE_URL`.
+- **TODO: cookie consent banner for EU/UK/Swiss visitors.** Microsoft Clarity runs without a consent signal, so
+  for those visitors it records without cookies (less complete sessions) and we rely on the Privacy Policy
+  alone. Add a banner that calls `clarity('consentv2', …)` with the visitor's choice (hook point:
+  `startClarity()` in `apps/web/src/lib/clarity.ts`); the same banner is required before turning on ads.
 
 ## Changelog
 
+- **2026-11-03**: Microsoft Clarity analytics (`apps/web/src/lib/clarity.ts`), loaded from the bundle in
+  production builds, with Clarity origins added to the CSP. Signed-in sessions are identified with the public
+  user id (custom id) and display name (friendly name and a `display_name` tag), never email or Google id.
+  Build-time `VITE_CLARITY_PROJECT_ID` (`''` disables). Privacy Policy updated (analytics, Microsoft as recipient).
+  EU/UK consent banner deferred: listed as a TODO in §13.
 - **2026-11-02**: Fixes from a security and UI review. Security: collection years capped at 10,000 and the
   rule SQL made overflow-safe (a huge year made every story page fail); a Newcomer's developments on their own
   unreviewed story are held for review; removing a correction follows the deciding rules (not your own, not on

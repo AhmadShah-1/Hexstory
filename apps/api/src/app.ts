@@ -32,6 +32,9 @@ import type { Storage } from './storage/index.js';
 
 /** Third-party origins the browser may contact. Keep in sync with VITE_MAP_STYLE_URL in apps/web. */
 const MAP_ORIGINS = ['https://tiles.openfreemap.org'];
+/** Microsoft Clarity (analytics, apps/web/src/lib/clarity.ts): its tag, collection endpoints and pixels. */
+const CLARITY_ORIGINS = ['https://*.clarity.ms'];
+const CLARITY_IMAGE_ORIGINS = [...CLARITY_ORIGINS, 'https://c.bing.com'];
 const WEB_DIST = fileURLToPath(new URL('../../web/dist/', import.meta.url));
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -73,10 +76,10 @@ export async function buildApp({
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'"],
+        scriptSrc: ["'self'", ...CLARITY_ORIGINS],
         styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", 'data:', 'blob:', ...MAP_ORIGINS, ...imageOrigins],
-        connectSrc: ["'self'", ...MAP_ORIGINS, ...uploadOrigins],
+        imgSrc: ["'self'", 'data:', 'blob:', ...MAP_ORIGINS, ...CLARITY_IMAGE_ORIGINS, ...imageOrigins],
+        connectSrc: ["'self'", ...MAP_ORIGINS, ...CLARITY_ORIGINS, ...uploadOrigins],
         workerSrc: ["'self'", 'blob:'],
         fontSrc: ["'self'"],
         objectSrc: ["'none'"],

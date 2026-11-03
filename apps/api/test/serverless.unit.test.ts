@@ -76,7 +76,7 @@ describe('Vercel application startup', () => {
         const response = await app.inject({ method: 'GET', url });
         expect(response.statusCode).toBe(200);
         expect(response.headers['content-type']).toContain('text/html');
-        expect(response.headers['content-security-policy']).toContain("script-src 'self'");
+        expect(response.headers['content-security-policy']).toContain("script-src 'self' https://*.clarity.ms");
         if (onVercel) expect(response.headers['content-security-policy']).toContain('https://images.hexstory.wiki');
         expect(response.body).toBe(html);
       }

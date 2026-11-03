@@ -1,6 +1,6 @@
 # Privacy Policy
 
-_Last updated: 2 November 2026_
+_Last updated: 3 November 2026_
 
 This policy explains what Hexstory collects and how it is used. Hexstory is operated from Jersey
 City, New Jersey, United States, and is responsible for the personal data described here. Contact:
@@ -17,6 +17,7 @@ hexstory.world@gmail.com.
 | Moderation records: reports, requests to ban someone, and moderator actions (such as approvals, removals and bans, with their reasons) | You, reviewers and moderators | Keep the Service safe and make moderation accountable. Visible only to reviewers and moderators |
 | IP address, browser info, timestamps | Automatically | Security, rate limiting, abuse and ban enforcement |
 | Session cookie | Automatically | Keep you signed in |
+| How you use the site: pages viewed, clicks, scrolling and mouse movement, device and browser type, approximate location from your IP address | Automatically, through Microsoft Clarity | Understand how the site is used and fix problems. If you are signed in, your user ID and public display name are attached so we can find the sessions of someone who reports a problem |
 
 We remove location and camera metadata (EXIF) from uploaded images before storing them.
 
@@ -24,7 +25,12 @@ We remove location and camera metadata (EXIF) from uploaded images before storin
 The location is used only on your device, to find the nearest stories among those already loaded in your
 browser. It is never sent to Hexstory or stored by us.
 
-We do not store your Google profile picture or full name. We do not use advertising trackers and we do not sell your personal data.
+We do not store your Google profile picture or full name. We do not show ads and we do not sell your personal data.
+
+**Analytics.** We use Microsoft Clarity to see how people use Hexstory (recordings of page activity and
+heatmaps). Clarity sets its own cookies and Microsoft processes this data under the
+[Microsoft Privacy Statement](https://privacy.microsoft.com/privacystatement). Your email address and Google
+account ID are never sent to Clarity.
 
 ## What is public
 
@@ -56,6 +62,7 @@ or contact us and we will review it.
   Cloudflare R2 (image storage and delivery) and, where used, Redis Cloud (rate limits and short-lived
   caches)
 - Google, for sign-in
+- Microsoft, through Clarity, for the usage analytics described above
 - Komoot's Photon service (OpenStreetMap data), to look up places you type into the map's search box: it
   receives the search text from our server, never your IP address or account
 - Stripe and PayPal, only if you choose to make a voluntary contribution from the Support page: you pay on

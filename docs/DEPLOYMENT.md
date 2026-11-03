@@ -599,6 +599,7 @@ flags, which contain no secrets.
 | `USAGE_WARN_PERCENT`, `USAGE_CRITICAL_PERCENT`, `USAGE_CACHE_SECONDS` | new | you (optional) | no | Dashboard thresholds (default 75 / 90) and cache time (default 900 s). Invalid values are ignored and listed on the dashboard |
 | `PORT`, `UPLOAD_DIR` | existing | not used on Vercel | no | Local server only |
 | `VITE_MAP_STYLE_URL`, `VITE_FEATURE_ADS` | existing | you, if needed | no (public, build-time) | Baked into the browser bundle |
+| `VITE_CLARITY_PROJECT_ID` | new | you (optional) | no (public, build-time) | Microsoft Clarity project; unset uses `z80oz1x04t`, empty string disables. Set it to `''` for Preview builds if you don't want preview sessions recorded |
 | `PG*`, `POSTGRES_*` | injected, unused | Neon integration | yes | Ignore |
 
 Never put a secret in a `VITE_*` variable: those are compiled into public JavaScript.

@@ -8,3 +8,6 @@ export const FEATURES = {
 } as const;
 
 export const MAP_STYLE_URL = import.meta.env.VITE_MAP_STYLE_URL ?? 'https://tiles.openfreemap.org/styles/positron';
+
+/** Microsoft Clarity project (public id). Production builds only; set VITE_CLARITY_PROJECT_ID='' to turn it off. */
+export const CLARITY_PROJECT_ID = import.meta.env.VITE_CLARITY_PROJECT_ID ?? 'z80oz1x04t';

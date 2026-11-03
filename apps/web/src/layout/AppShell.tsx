@@ -1,10 +1,12 @@
 import { useEffect } from 'react';
-import { Link, Outlet, useSearchParams } from 'react-router';
+import { Link, Outlet, useLocation, useSearchParams } from 'react-router';
+import { useSession } from '../api/queries';
 import { ToastProvider, useToast } from '../components/Toast';
 import { TourProvider } from '../components/Tour';
 import { MapControls } from '../map/MapControls';
 import { MapProvider } from '../map/MapContext';
 import { WorldMap } from '../map/WorldMap';
+import { identifyClarityUser } from '../lib/clarity';
 import { Welcome } from '../views/Welcome';
 import { TopBar } from './TopBar';
 
@@ -31,6 +33,7 @@ export function AppShell() {
           <FooterLinks />
           <SignInNotice />
           <Welcome />
+          <ClarityIdentify />
         </div>
         </TourProvider>
       </MapProvider>
@@ -60,5 +63,17 @@ function SignInNotice() {
     params.delete('signin');
     setParams(params, { replace: true });
   }, [signin, params, setParams, toast]);
+  return null;
+}
+
+/** Tags Clarity recordings with the signed-in person's public id and display name (re-sent per page, as Clarity advises). */
+function ClarityIdentify() {
+  const user = useSession().data?.user;
+  const { pathname } = useLocation();
+  const id = user?.id;
+  const displayName = user?.displayName;
+  useEffect(() => {
+    if (id && displayName) identifyClarityUser({ id, displayName });
+  }, [id, displayName, pathname]);
   return null;
 }

@@ -3,4 +3,5 @@
 interface ImportMetaEnv {
   readonly VITE_MAP_STYLE_URL?: string;
   readonly VITE_FEATURE_ADS?: string;
+  readonly VITE_CLARITY_PROJECT_ID?: string;
 }
